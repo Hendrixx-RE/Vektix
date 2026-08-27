@@ -1,0 +1,103 @@
+package store
+
+import (
+	"context"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestStore_AddQueryDelete(t *testing.T) {
+	tempDir := filepath.Join(t.TempDir(), "store_test")
+
+	s, err := NewPersistentDB(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	chunks := []Chunk{
+		{
+			ID:        "doc-1",
+			Path:      "a/b/c.txt",
+			Content:   "hello world",
+			Embedding: []float32{1.0, 0.0},
+			Locator: Locator{
+				Kind:  LocatorLineRange,
+				Start: 1,
+				End:   10,
+			},
+		},
+		{
+			ID:        "doc-2",
+			Path:      "a/b/d.txt",
+			Content:   "test document",
+			Embedding: []float32{0.0, 1.0},
+			Locator: Locator{
+				Kind:  LocatorLineRange,
+				Start: 1,
+				End:   5,
+			},
+		},
+	}
+
+	ctx := context.Background()
+
+	// Add
+	err = s.AddDocuments(ctx, chunks)
+	if err != nil {
+		t.Fatalf("failed to add documents: %v", err)
+	}
+
+	// Query exactly for doc-1's path
+	where := map[string]string{
+		"path": "a/b/c.txt",
+	}
+
+	res, err := s.QueryEmbedding(ctx, []float32{1.0, 0.0}, 5, where, nil)
+	if err != nil {
+		t.Fatalf("failed to query embedding: %v", err)
+	}
+
+	if len(res) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(res))
+	}
+
+	if res[0].ID != "doc-1" {
+		t.Errorf("expected doc-1, got %s", res[0].ID)
+	}
+	if res[0].Path != "a/b/c.txt" {
+		t.Errorf("expected a/b/c.txt, got %s", res[0].Path)
+	}
+	if !reflect.DeepEqual(res[0].Locator, chunks[0].Locator) {
+		t.Errorf("expected locator %+v, got %+v", chunks[0].Locator, res[0].Locator)
+	}
+
+	// Delete doc-1 by path
+	err = s.Delete(ctx, where, nil)
+	if err != nil {
+		t.Fatalf("failed to delete document: %v", err)
+	}
+
+	// Query again, should not find doc-1
+	res2, err := s.QueryEmbedding(ctx, []float32{1.0, 0.0}, 5, where, nil)
+	if err != nil {
+		t.Fatalf("failed to query embedding: %v", err)
+	}
+
+	if len(res2) != 0 {
+		t.Fatalf("expected 0 results after delete, got %d", len(res2))
+	}
+}
+
+func TestStore_EmptyAdd(t *testing.T) {
+	tempDir := filepath.Join(t.TempDir(), "store_empty_test")
+	s, err := NewPersistentDB(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	err = s.AddDocuments(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("AddDocuments with empty slice failed: %v", err)
+	}
+}
