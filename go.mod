@@ -1,3 +1,5 @@
-module github.com/Hendrixx-RE/Vektix.git
+module github.com/Hendrixx-RE/Vektix
 
 go 1.27.0
+
+require github.com/BurntSushi/toml v1.6.0
