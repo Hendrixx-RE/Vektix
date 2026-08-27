@@ -60,7 +60,7 @@ func TestManifestChangeDetection(t *testing.T) {
 	}
 
 	// Modify content but keep size and mtime different
-	// Wait, if mtime is different but size is same, we check hash.
+	// Test hash comparison when size is unchanged but mtime differs
 	os.WriteFile(filePath, []byte("hello there"), 0644) // same size 11
 	// change mtime artificially
 	os.Chtimes(filePath, time.Now(), time.Now().Add(1*time.Hour))

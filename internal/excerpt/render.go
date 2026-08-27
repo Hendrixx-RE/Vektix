@@ -65,15 +65,10 @@ func Render(chunk store.Chunk, expandedText string, loc store.Locator, cfg Rende
 	for i, line := range lines {
 		lineNum := loc.Start + i
 		
-		// For Page locators, we don't have line numbers, but we can print them starting from 1 for the paragraph,
-		// or just omit them. The prompt says: "For Page locators the header shows a page number rather than a line range."
-		// It doesn't explicitly say to omit line numbers in the gutter, but usually it makes sense to just use relative or omit.
-		// Let's just print 1, 2, 3... for pages.
-		
+		// For Page locators, we do not have absolute line numbers, so we omit them from the gutter.
 		var gutter string
 		if loc.Kind == store.LocatorPage {
-			gutter = fmt.Sprintf(" %*s | ", gutterWidth, "") // empty gutter for page? 
-			// wait, if we just print line numbers starting at 1, that works too. Let's omit number for page.
+			gutter = fmt.Sprintf(" %*s | ", gutterWidth, "")
 		} else {
 			gutter = fmt.Sprintf(" %*d | ", gutterWidth, lineNum)
 		}

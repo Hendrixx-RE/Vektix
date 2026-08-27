@@ -90,20 +90,15 @@ func (ig *Ignorer) ShouldIgnore(absPath string, isDir bool) bool {
 	}
 
 	// 2. Config-level excludes (Layer 2)
-	// Only evaluate at the root to avoid redundant checks? 
-	// Or we can just evaluate it once.
 	if ig.isConfigIgnored(absPath, isDir, baseName) {
 		return true
 	}
 
 	// 3. .vektixignore rules (Layer 3)
-	// Evaluated from bottom up (current dir to root)
-	// Actually, order matters: a negate rule in a subdirectory overrides a rule in a parent directory.
+	// We evaluate rules from root to leaf, because a negate rule in a subdirectory
+	// overrides an exclusion rule in a parent directory, meaning the last matching rule wins.
 	
 	ignored := false
-	// We need to collect all rules from root to leaf to evaluate them in order?
-	// .gitignore spec: rules in a file in a deeper directory override rules in a file in a higher directory.
-	// So we evaluate from root to leaf, and the last matching rule wins.
 	
 	var nodes []*Ignorer
 	for curr := ig; curr != nil; curr = curr.parent {

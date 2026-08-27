@@ -61,9 +61,10 @@ func ResolvePath(targetPath string, explicitUnsafe bool, cfg *config.Config) (st
 	}
 
 	if !explicitUnsafe {
-		// Either global config allow_secrets is false, or we just enforce it here.
-		// The prompt says: "Enforce the secrets denylist AT READ TIME, not just at index time... Crossing either boundary requires an explicit unsafe flag passed by the human"
-		// If cfg is not nil and cfg.Safety.AllowSecrets is true, does that bypass? The prompt explicitly mentions passing an unsafe flag.
+		// Access to secret files is blocked by default. This gate can be bypassed in two ways:
+		// 1. Globally, by a human setting allow_secrets = true in their config.toml
+		// 2. Per-invocation, by a human passing the --unsafe flag
+		// Both are deliberate, human-controlled opt-ins. The unsafe flag is only ever supplied from CLI parsing, never from the model.
 		if (cfg == nil || !cfg.Safety.AllowSecrets) && matchesSecretPattern(evalPath) {
 			return "", fmt.Errorf("path matches secrets denylist, requires explicit unsafe flag: %s", targetPath)
 		}
