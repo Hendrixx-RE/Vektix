@@ -60,7 +60,7 @@ func ChunkStructured(path, content string) []store.Chunk {
 	for i, line := range lines {
 		// Only consider top-level keys. Indentation should be 0 or small.
 		// For JSON, we might have { on line 1, and keys indented by 2 or 4 spaces.
-		// Let's just check if it matches the key regex, but limit leading spaces.
+		// Check if it matches the key regex, limiting leading spaces to capture top-level keys.
 		leadingSpaces := len(line) - len(strings.TrimLeft(line, " \t"))
 		if leadingSpaces <= 4 {
 			matches := keyRe.FindStringSubmatch(line)

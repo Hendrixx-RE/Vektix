@@ -70,8 +70,7 @@ func chunkGo(path, content string) []store.Chunk {
 			sym = "func "
 			if d.Recv != nil && len(d.Recv.List) > 0 {
 				sym += "("
-				// just grab the string representation of receiver type
-				// Actually, easier to just extract the first line as signature
+				// Extract the first line to use as the function signature
 				sigLine := declLines[0]
 				// remove { if present
 				if idx := strings.Index(sigLine, "{"); idx != -1 {
