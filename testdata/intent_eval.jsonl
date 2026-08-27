@@ -1,0 +1,23 @@
+{"input": "open main.go", "expected": {"action": "open", "path": "main.go"}, "tier": 1}
+{"input": "find *.pdf", "expected": {"action": "locate", "query": "*.pdf"}, "tier": 1}
+{"input": "read config.yaml", "expected": {"action": "read", "path": "config.yaml"}, "tier": 1}
+{"input": "show src/app.js", "expected": {"action": "read", "path": "src/app.js"}, "tier": 1}
+{"input": "cat internal/test.go", "expected": {"action": "read", "path": "internal/test.go"}, "tier": 1}
+{"input": "ls /var/log", "expected": {"action": "list", "path": "/var/log"}, "tier": 1}
+{"input": "list ~/.config", "expected": {"action": "list", "path": "~/.config"}, "tier": 1}
+{"input": "head 50 app.py", "expected": {"action": "read", "path": "app.py", "lines": "50"}, "tier": 1}
+{"input": "tail -30 server.go", "expected": {"action": "read", "path": "server.go", "lines": "-30"}, "tier": 1}
+{"input": "copy it", "expected": {"action": "copy", "path": "it"}, "tier": 1}
+{"input": "copy #2", "expected": {"action": "copy", "path": "#2"}, "tier": 1}
+{"input": "copy the first one", "expected": {"action": "copy", "path": "the first one"}, "tier": 1}
+
+{"input": "open the pod bay doors hal", "expected": {"action": "locate", "query": "pod bay doors"}, "tier": 2}
+{"input": "read between the lines in my poetry", "expected": {"action": "excerpt", "query": "poetry"}, "tier": 2}
+{"input": "show me what's in the docker file", "expected": {"action": "read", "query": "docker"}, "tier": 2}
+{"input": "cat is such a cute animal in my notes", "expected": {"action": "locate", "query": "cat animal notes"}, "tier": 2}
+{"input": "ls there anything about kubernetes here", "expected": {"action": "excerpt", "query": "kubernetes"}, "tier": 2}
+{"input": "list out the top reasons for adopting rust", "expected": {"action": "excerpt", "query": "reasons adopting rust"}, "tier": 2}
+{"input": "head straight to the database section", "expected": {"action": "excerpt", "query": "database"}, "tier": 2}
+{"input": "tail end of the meeting notes from yesterday", "expected": {"action": "read", "query": "meeting notes"}, "tier": 2}
+{"input": "find out what I wrote about docker", "expected": {"action": "excerpt", "query": "docker"}, "tier": 2}
+{"input": "copy that paragraph about memory usage", "expected": {"action": "excerpt", "query": "memory usage"}, "tier": 2}
