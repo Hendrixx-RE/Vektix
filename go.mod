@@ -7,4 +7,4 @@ require (
 	github.com/philippgille/chromem-go v0.7.0
 )
 
-require github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
+require github.com/ledongthuc/pdf v0.0.0-20250510234604-a6dfec7e9de4
