@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
 )
@@ -77,9 +83,86 @@ Commands:
 `)
 }
 
+func checkOllamaReachable(host string) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(host + "/")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func checkOllamaModel(host, modelName string) (bool, error) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(host + "/api/tags")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+
+	var res struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return false, err
+	}
+	for _, m := range res.Models {
+		if m.Name == modelName || m.Name == modelName+":latest" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func pullModel(host, modelName string) error {
+	reqBody, _ := json.Marshal(map[string]string{"name": modelName})
+	resp, err := http.Post(host+"/api/pull", "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+
+	decoder := json.NewDecoder(resp.Body)
+	var lastLen int
+	for {
+		var chunk struct {
+			Status    string `json:"status"`
+			Completed int64  `json:"completed"`
+			Total     int64  `json:"total"`
+		}
+		if err := decoder.Decode(&chunk); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+
+		msg := fmt.Sprintf("Pulling %s: %s", modelName, chunk.Status)
+		if chunk.Total > 0 {
+			percent := float64(chunk.Completed) / float64(chunk.Total) * 100
+			msg = fmt.Sprintf("Pulling %s: %s (%.1f%%)", modelName, chunk.Status, percent)
+		}
+
+		fmt.Printf("\r%s\r%s", strings.Repeat(" ", lastLen), msg)
+		lastLen = len(msg)
+	}
+	fmt.Printf("\n✓ Pulled %s successfully\n", modelName)
+	return nil
+}
+
 func setupCmd(args []string) {
 	fmt.Println("Running setup...")
-	
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Printf("Warning: Failed to load config: %v\n", err)
@@ -105,15 +188,41 @@ func setupCmd(args []string) {
 			configPath := filepath.Join(configDir, "config.toml")
 			if _, err := os.Stat(configPath); os.IsNotExist(err) {
 				fmt.Printf("✓ Created default config file at %s\n", configPath)
-				// TODO: Actually serialize the default config to this file.
-				// For now, the user can use the builtin defaults.
 			}
 		}
 	}
 
-	// TODO: Check Ollama reachability and model presence once internal/ollama is ready
-	fmt.Println("[TODO] Check Ollama reachability and pull models (nomic-embed-text, qwen2.5:0.5b)")
-	fmt.Println("Setup partial completion.")
+	fmt.Println("Checking Ollama...")
+	if err := checkOllamaReachable(cfg.Ollama.Host); err != nil {
+		fmt.Printf("✗ Ollama not reachable at %s\n", cfg.Ollama.Host)
+		fmt.Println("  Please install Ollama (https://ollama.com) and start it before running setup.")
+		os.Exit(1)
+	}
+	fmt.Printf("✓ Ollama reachable at %s\n", cfg.Ollama.Host)
+
+	fmt.Println("Checking required models...")
+	models := []string{cfg.Ollama.EmbeddingModel, cfg.Ollama.IntentModel}
+	for _, model := range models {
+		has, err := checkOllamaModel(cfg.Ollama.Host, model)
+		if err != nil {
+			fmt.Printf("Error checking model %s: %v\n", model, err)
+			os.Exit(1)
+		}
+		if !has {
+			if err := pullModel(cfg.Ollama.Host, model); err != nil {
+				fmt.Printf("\nError pulling %s: %v\n", model, err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Printf("✓ Model %s is already present\n", model)
+		}
+	}
+
+	fmt.Println("\nSetup complete! Suggested default index roots:")
+	for _, root := range cfg.Index.IndexDirs {
+		fmt.Printf("  - %s\n", root)
+	}
+	fmt.Println("\nRun 'vektix index <path>' to start indexing your files.")
 }
 
 func doctorCmd(args []string) {
@@ -121,8 +230,10 @@ func doctorCmd(args []string) {
 	fmt.Println("===================")
 
 	cfg, err := config.Load()
+	exitCode := 0
 	if err != nil {
 		fmt.Printf("✗ Config: Failed to load: %v\n", err)
+		exitCode = 1
 	} else {
 		fmt.Println("✓ Config: Loaded successfully")
 	}
@@ -130,15 +241,39 @@ func doctorCmd(args []string) {
 	dataDir, err := config.ExpandPath(cfg.General.DataDir)
 	if err != nil {
 		fmt.Printf("✗ Data Directory: Error resolving path: %v\n", err)
+		exitCode = 1
 	} else if _, err := os.Stat(dataDir); os.IsNotExist(err) {
 		fmt.Printf("✗ Data Directory: %s does not exist\n", dataDir)
+		exitCode = 1
 	} else {
 		fmt.Printf("✓ Data Directory: %s exists\n", dataDir)
 	}
 
-	// TODO: Check Ollama reachability and model presence once internal/ollama is ready
-	fmt.Println("? Ollama: [TODO] Check reachability via internal/ollama")
-	fmt.Println("? Models: [TODO] Check nomic-embed-text, qwen2.5:0.5b presence via internal/ollama")
+	if err := checkOllamaReachable(cfg.Ollama.Host); err != nil {
+		fmt.Printf("✗ Ollama: Not reachable at %s\n", cfg.Ollama.Host)
+		fmt.Println("  Please install Ollama (https://ollama.com) and ensure it is running.")
+		exitCode = 1
+	} else {
+		fmt.Printf("✓ Ollama: Reachable at %s\n", cfg.Ollama.Host)
+
+		models := []string{cfg.Ollama.EmbeddingModel, cfg.Ollama.IntentModel}
+		for _, model := range models {
+			has, err := checkOllamaModel(cfg.Ollama.Host, model)
+			if err != nil {
+				fmt.Printf("✗ Models: Error checking %s: %v\n", model, err)
+				exitCode = 1
+			} else if !has {
+				fmt.Printf("✗ Models: Missing %s. Run 'vektix setup' to install.\n", model)
+				exitCode = 1
+			} else {
+				fmt.Printf("✓ Models: Found %s\n", model)
+			}
+		}
+	}
+
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
 }
 
 func indexCmd(args []string) {
