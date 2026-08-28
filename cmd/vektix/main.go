@@ -2,17 +2,24 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/index"
+	"github.com/Hendrixx-RE/Vektix/internal/ollama"
+	"github.com/Hendrixx-RE/Vektix/internal/store"
 )
 
 var version = "dev"
@@ -278,11 +285,157 @@ func doctorCmd(args []string) {
 
 func indexCmd(args []string) {
 	fs := flag.NewFlagSet("index", flag.ExitOnError)
-	dryRun := fs.Bool("dry-run", false, "list what WOULD be indexed")
-	exclude := fs.String("exclude", "", "exclude pattern")
-	_ = fs.Parse(args)
+	dryRun := fs.Bool("dry-run", false, "list what WOULD be indexed, without writing to the store")
+	exclude := fs.String("exclude", "", "comma-separated glob patterns or paths to exclude")
+	flagArgs, roots := splitFlags(fs, args)
+	_ = fs.Parse(flagArgs)
 
-	fmt.Printf("not yet implemented: index (dryRun=%v, exclude=%s, args=%v)\n", *dryRun, *exclude, fs.Args())
+	if len(roots) == 0 {
+		fmt.Println("Usage: vektix index <path> [--dry-run] [--exclude pattern]")
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+	applyExcludeFlag(&cfg.Index.Exclude, *exclude)
+
+	runIndex(cfg, roots, index.ModeIndex, *dryRun)
+}
+
+// splitFlags separates flag tokens from positional arguments so flags may
+// appear anywhere on the command line — plan.md documents usage like
+// `vektix index ~/Documents --dry-run`, with flags trailing the path, but
+// the stdlib flag package stops parsing flags at the first positional
+// argument and would silently leave --dry-run unset.
+func splitFlags(fs *flag.FlagSet, args []string) (flags, positional []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if len(a) < 2 || a[0] != '-' {
+			positional = append(positional, a)
+			continue
+		}
+		flags = append(flags, a)
+		name := strings.TrimLeft(a, "-")
+		if strings.ContainsRune(name, '=') {
+			continue // --flag=value is self-contained
+		}
+		if fl := fs.Lookup(name); fl != nil {
+			if bv, ok := fl.Value.(interface{ IsBoolFlag() bool }); !ok || !bv.IsBoolFlag() {
+				if i+1 < len(args) {
+					i++
+					flags = append(flags, args[i])
+				}
+			}
+		}
+	}
+	return flags, positional
+}
+
+// applyExcludeFlag folds a --exclude value into the config's exclude rules.
+// A pattern containing a glob metacharacter is treated as a filename rule
+// (matching the "*.pdf" example in plan.md); anything else is treated as a
+// path prefix (matching the "~/Documents/archive" example).
+func applyExcludeFlag(ex *config.ExcludeConfig, raw string) {
+	for _, pattern := range strings.Split(raw, ",") {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		if strings.ContainsAny(pattern, "*?[") {
+			ex.Files = append(ex.Files, pattern)
+		} else {
+			ex.Paths = append(ex.Paths, pattern)
+		}
+	}
+}
+
+// runIndex drives the index/sync pipeline and prints progress and a final
+// summary. It is shared by indexCmd and syncCmd so both commands stay
+// consistent with the manifest-refusal and quarantine behavior.
+func runIndex(cfg config.Config, roots []string, mode index.Mode, dryRun bool) {
+	dataDir, err := config.ExpandPath(cfg.General.DataDir)
+	if err != nil {
+		fmt.Printf("Error resolving data_dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	var (
+		st  index.VectorStore
+		cli index.Embedder
+	)
+	if !dryRun {
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			fmt.Printf("Error creating data_dir %s: %v\n", dataDir, err)
+			os.Exit(1)
+		}
+		s, err := store.NewPersistentDB(index.StorePath(dataDir))
+		if err != nil {
+			fmt.Printf("Error opening store: %v\n", err)
+			os.Exit(1)
+		}
+		st = s
+		cli = ollama.NewClient(ollama.Options{
+			Host:         cfg.Ollama.Host,
+			EmbedTimeout: time.Duration(cfg.Ollama.Timeouts.EmbedBatchSeconds) * time.Second,
+		})
+	}
+
+	engine := index.NewEngine(&cfg, st, cli, dataDir)
+	engine.DryRun = dryRun
+
+	var lastLen int
+	engine.OnProgress = func(p index.Progress) {
+		msg := fmt.Sprintf("scanned %d  indexed %d  chunks %d  quarantined %d",
+			p.Scanned, p.Indexed, p.Chunks, p.Quarantined)
+		fmt.Printf("\r%s\r%s", strings.Repeat(" ", lastLen), msg)
+		lastLen = len(msg)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	res, err := engine.Run(ctx, roots, mode)
+	if lastLen > 0 {
+		fmt.Printf("\r%s\r", strings.Repeat(" ", lastLen))
+	}
+
+	if err != nil {
+		var invalid *index.InvalidIndexError
+		if errors.As(err, &invalid) {
+			fmt.Println(invalid.Error())
+			os.Exit(1)
+		}
+		if errors.Is(err, context.Canceled) {
+			fmt.Println("Interrupted — index left in a consistent state.")
+			if res != nil {
+				fmt.Print(res.Summary())
+			}
+			os.Exit(130)
+		}
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if dryRun {
+		fmt.Printf("Would index %d file(s) — %d added, %d updated, %d unchanged:\n",
+			len(res.Files), res.Added, res.Updated, res.Unchanged)
+		for _, f := range res.Files {
+			fmt.Printf("  %s\n", f)
+		}
+		return
+	}
+
+	fmt.Print(res.Summary())
+	if len(res.Quarantined) > 0 {
+		fmt.Printf("  %d file(s) quarantined — see 'vektix status'\n", len(res.Quarantined))
+	}
 }
 
 func locateCmd(args []string) {
@@ -316,7 +469,17 @@ func listCmd(args []string) {
 }
 
 func syncCmd(args []string) {
-	fmt.Printf("not yet implemented: sync (args=%v)\n", args)
+	fs := flag.NewFlagSet("sync", flag.ExitOnError)
+	_ = fs.Parse(args)
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// No roots given: re-walk whatever the manifest already knows about.
+	runIndex(cfg, fs.Args(), index.ModeSync, false)
 }
 
 func statusCmd(args []string) {
