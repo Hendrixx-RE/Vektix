@@ -285,36 +285,6 @@ func indexCmd(args []string) {
 	fmt.Printf("not yet implemented: index (dryRun=%v, exclude=%s, args=%v)\n", *dryRun, *exclude, fs.Args())
 }
 
-func locateCmd(args []string) {
-	fs := flag.NewFlagSet("locate", flag.ExitOnError)
-	scope := fs.String("scope", "", "explicit scope override")
-	global := fs.Bool("global", false, "force full index")
-	fs.BoolVar(global, "g", false, "force full index")
-	_ = fs.Parse(args)
-
-	fmt.Printf("not yet implemented: locate (scope=%s, global=%v, args=%v)\n", *scope, *global, fs.Args())
-}
-
-func readCmd(args []string) {
-	fmt.Printf("not yet implemented: read (args=%v)\n", args)
-}
-
-func excerptCmd(args []string) {
-	fmt.Printf("not yet implemented: excerpt (args=%v)\n", args)
-}
-
-func openCmd(args []string) {
-	fmt.Printf("not yet implemented: open (args=%v)\n", args)
-}
-
-func copyCmd(args []string) {
-	fmt.Printf("not yet implemented: copy (args=%v)\n", args)
-}
-
-func listCmd(args []string) {
-	fmt.Printf("not yet implemented: list (args=%v)\n", args)
-}
-
 func syncCmd(args []string) {
 	fmt.Printf("not yet implemented: sync (args=%v)\n", args)
 }

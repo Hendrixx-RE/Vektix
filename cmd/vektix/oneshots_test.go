@@ -1,0 +1,348 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/index"
+	"github.com/Hendrixx-RE/Vektix/internal/store"
+)
+
+// fixture is a small, fully self-contained corpus: two indexed roots each
+// holding one file that mentions "postgres", plus a third indexed root that is
+// deliberately empty, and a real Go file and a real dotenv file for the
+// line-range and secrets-denylist tests. No test in this file talks to a real
+// Ollama instance; the embed endpoint is a local httptest server.
+type fixture struct {
+	cfg                                          config.Config
+	dataDir                                      string
+	ollama                                       *httptest.Server
+	projectDir, otherDir, emptyDir               string
+	infraPath, otherDocPath, mainGoPath, envPath string
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	root := t.TempDir()
+
+	projectDir := filepath.Join(root, "project")
+	otherDir := filepath.Join(root, "other")
+	emptyDir := filepath.Join(root, "empty-project")
+	for _, d := range []string{
+		filepath.Join(projectDir, "notes"),
+		filepath.Join(otherDir, "notes"),
+		emptyDir,
+	} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	infraPath := filepath.Join(projectDir, "notes", "infra.md")
+	infraContent := "Local Postgres Configuration\n\n" +
+		"Connection settings for the postgres database used by this project.\n" +
+		"Host db01, pool max 20, idle timeout 5 minutes.\n"
+	if err := os.WriteFile(infraPath, []byte(infraContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	otherDocPath := filepath.Join(otherDir, "notes", "docker.md")
+	otherContent := "Some unrelated notes about postgres kept here for reference.\n"
+	if err := os.WriteFile(otherDocPath, []byte(otherContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	mainGoPath := filepath.Join(projectDir, "main.go")
+	mainGoContent := "line one\nline two\nline three\nline four\nline five\n"
+	if err := os.WriteFile(mainGoPath, []byte(mainGoContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	envPath := filepath.Join(projectDir, ".env")
+	if err := os.WriteFile(envPath, []byte("SECRET_KEY=abcd1234"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A local, deterministic stand-in for Ollama's /api/embed. Every test in
+	// this file runs against this instead of a live model.
+	ollama := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		embeddings := make([][]float32, len(req.Input))
+		for i := range req.Input {
+			embeddings[i] = []float32{1, 0, 0, 0}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"embeddings": embeddings})
+	}))
+	t.Cleanup(ollama.Close)
+
+	dataDir := t.TempDir()
+
+	cfg := config.DefaultConfig()
+	cfg.General.ScopeMode = "auto"
+	cfg.Index.IndexDirs = []string{projectDir, otherDir, emptyDir}
+	cfg.Safety.ConfineToRoots = true
+	cfg.Safety.AllowSecrets = false
+	cfg.Search.MaxResults = 8
+	cfg.Search.RRFK = 60
+	cfg.Search.MinArms = 1
+	cfg.Search.OversampleFloor = 0.01
+	cfg.Ollama.Host = ollama.URL
+	cfg.Ollama.EmbeddingModel = "mock-embed"
+
+	infraChunk := store.Chunk{
+		ID:        "infra-1",
+		Path:      infraPath,
+		Content:   "postgres",
+		Embedding: []float32{1, 0, 0, 0},
+		Locator:   store.Locator{Kind: store.LocatorLineRange, Start: 3, End: 3},
+	}
+	otherChunk := store.Chunk{
+		ID:        "other-1",
+		Path:      otherDocPath,
+		Content:   "postgres",
+		Embedding: []float32{0, 1, 0, 0},
+		Locator:   store.Locator{Kind: store.LocatorLineRange, Start: 1, End: 1},
+	}
+
+	db, err := store.NewPersistentDB(filepath.Join(dataDir, storeDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddDocuments(context.Background(), []store.Chunk{infraChunk, otherChunk}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := &index.Manifest{
+		EmbeddingModel: cfg.Ollama.EmbeddingModel,
+		Dim:            4,
+		PrefixScheme:   "v1",
+		ChunkerVersion: 1,
+		Files: map[string]index.FileMeta{
+			infraPath:    {Chunks: []string{"infra-1"}},
+			otherDocPath: {Chunks: []string{"other-1"}},
+		},
+		DirCounts: map[string]int{
+			"":         2,
+			projectDir: 1,
+			otherDir:   1,
+		},
+	}
+	if err := m.SaveManifest(filepath.Join(dataDir, manifestFileName)); err != nil {
+		t.Fatal(err)
+	}
+
+	return &fixture{
+		cfg:          cfg,
+		dataDir:      dataDir,
+		ollama:       ollama,
+		projectDir:   projectDir,
+		otherDir:     otherDir,
+		emptyDir:     emptyDir,
+		infraPath:    infraPath,
+		otherDocPath: otherDocPath,
+		mainGoPath:   mainGoPath,
+		envPath:      envPath,
+	}
+}
+
+// testEnv is a fresh *env over the fixture's corpus, with its own output
+// buffers and no clipboard/editor side effects.
+func (f *fixture) testEnv(cwd string) (*env, *bytes.Buffer, *bytes.Buffer) {
+	cfg := f.cfg
+	var out, errOut bytes.Buffer
+	e := &env{
+		cfg:     &cfg,
+		dataDir: f.dataDir,
+		cwd:     cwd,
+		stdout:  &out,
+		stderr:  &errOut,
+		copyFn: func(w io.Writer, text string) (string, error) {
+			return "mock", nil
+		},
+		openFn: func(path string, allowUnsafe bool, cfg *config.Config) error {
+			return nil
+		},
+	}
+	return e, &out, &errOut
+}
+
+func decodeJSON(t *testing.T, data []byte) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, data)
+	}
+	return m
+}
+
+func jsonResultPaths(t *testing.T, payload map[string]any) []string {
+	t.Helper()
+	var paths []string
+	results, _ := payload["results"].([]any)
+	for _, r := range results {
+		row := r.(map[string]any)
+		paths = append(paths, row["path"].(string))
+	}
+	return paths
+}
+
+// TestLocate_ScopedVsGlobal covers the core scoping requirement: a query that
+// matches in two different indexed roots must only surface the in-scope root's
+// result when scoped, and both when --global is passed.
+func TestLocate_ScopedVsGlobal(t *testing.T) {
+	f := newFixture(t)
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runLocate(e, []string{"--scope=" + f.projectDir, "--json", "postgres"})
+	if code != 0 {
+		t.Fatalf("scoped locate: expected exit 0, got %d (stderr empty? out=%s)", code, out.String())
+	}
+	payload := decodeJSON(t, out.Bytes())
+	paths := jsonResultPaths(t, payload)
+	if len(paths) != 1 || paths[0] != f.infraPath {
+		t.Errorf("scoped locate: expected only %s, got %v", f.infraPath, paths)
+	}
+
+	e2, out2, _ := f.testEnv(f.projectDir)
+	code2 := runLocate(e2, []string{"--global", "--json", "postgres"})
+	if code2 != 0 {
+		t.Fatalf("global locate: expected exit 0, got %d", code2)
+	}
+	payload2 := decodeJSON(t, out2.Bytes())
+	paths2 := jsonResultPaths(t, payload2)
+	seen := map[string]bool{}
+	for _, p := range paths2 {
+		seen[p] = true
+	}
+	if !seen[f.infraPath] || !seen[f.otherDocPath] {
+		t.Errorf("global locate: expected both %s and %s, got %v", f.infraPath, f.otherDocPath, paths2)
+	}
+}
+
+// TestLocate_EmptyScopeNamesScopeAndOffersGlobal is plan.md's central UX
+// requirement: a zero-result response must name the active scope and offer
+// the global retry inline, never implying the file doesn't exist at all.
+func TestLocate_EmptyScopeNamesScopeAndOffersGlobal(t *testing.T) {
+	f := newFixture(t)
+
+	e, _, errOut := f.testEnv(f.projectDir)
+	code := runLocate(e, []string{"--scope=" + f.emptyDir, "postgres"})
+	if code == 0 {
+		t.Fatalf("expected non-zero exit for empty scope, got 0")
+	}
+	msg := errOut.String()
+	if !strings.Contains(msg, displayPath(f.emptyDir)) {
+		t.Errorf("empty-result message must name the active scope %q; got: %s", f.emptyDir, msg)
+	}
+	if !strings.Contains(msg, "--global") {
+		t.Errorf("empty-result message must offer the --global retry; got: %s", msg)
+	}
+	if !strings.Contains(msg, "match outside this scope") && !strings.Contains(msg, "chunks") {
+		t.Errorf("empty-result message must be honest about matches existing elsewhere; got: %s", msg)
+	}
+}
+
+// TestExcerpt_JSONHasNoANSI guards against internal/excerpt/render.go's
+// hardcoded highlight escape codes leaking into machine-readable output.
+func TestExcerpt_JSONHasNoANSI(t *testing.T) {
+	f := newFixture(t)
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runExcerpt(e, []string{"--scope=" + f.projectDir, "--json", "postgres"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, out.String())
+	}
+	if bytes.ContainsRune(out.Bytes(), 0x1b) {
+		t.Errorf("--json output contains an ANSI escape byte: %q", out.String())
+	}
+	payload := decodeJSON(t, out.Bytes())
+	results, _ := payload["results"].([]any)
+	if len(results) == 0 {
+		t.Fatalf("expected at least one excerpt result, got none: %s", out.String())
+	}
+	text := results[0].(map[string]any)["text"].(string)
+	if strings.ContainsRune(text, 0x1b) {
+		t.Errorf("excerpt text field contains an ANSI escape: %q", text)
+	}
+}
+
+// TestRead_LineRange covers a direct path read restricted to an explicit line
+// range, verifying the printed bytes are exactly the requested lines.
+func TestRead_LineRange(t *testing.T) {
+	f := newFixture(t)
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runRead(e, []string{"--lines=2-4", f.mainGoPath})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	want := "line two\nline three\nline four\n"
+	if out.String() != want {
+		t.Errorf("read --lines=2-4: got %q, want %q", out.String(), want)
+	}
+}
+
+// TestRead_SecretsDenylistRefusal ensures a dotenv file is refused without
+// --unsafe, and that its content never reaches stdout or stderr.
+func TestRead_SecretsDenylistRefusal(t *testing.T) {
+	f := newFixture(t)
+
+	e, out, errOut := f.testEnv(f.projectDir)
+	code := runRead(e, []string{f.envPath})
+	if code == 0 {
+		t.Fatalf("expected refusal (non-zero exit) reading a secrets-denylist path")
+	}
+	combined := out.String() + errOut.String()
+	if strings.Contains(combined, "abcd1234") {
+		t.Errorf("secret content leaked into output: %s", combined)
+	}
+	if !strings.Contains(errOut.String(), "secrets denylist") {
+		t.Errorf("refusal message should mention the secrets denylist; got: %s", errOut.String())
+	}
+
+	// The same read succeeds once --unsafe is passed as a literal CLI flag.
+	e2, out2, _ := f.testEnv(f.projectDir)
+	code2 := runRead(e2, []string{"--unsafe", f.envPath})
+	if code2 != 0 {
+		t.Fatalf("expected --unsafe to permit the read, got exit %d", code2)
+	}
+	if !strings.Contains(out2.String(), "abcd1234") {
+		t.Errorf("expected --unsafe read to return file content, got: %s", out2.String())
+	}
+}
+
+// TestLocate_MissingManifestGivesReindexGuidance checks that a missing index
+// produces the documented remedy rather than a stack trace or empty output.
+func TestLocate_MissingManifestGivesReindexGuidance(t *testing.T) {
+	f := newFixture(t)
+	cfg := f.cfg
+	var out, errOut bytes.Buffer
+	e := &env{
+		cfg:     &cfg,
+		dataDir: t.TempDir(), // no manifest.json written here
+		cwd:     f.projectDir,
+		stdout:  &out,
+		stderr:  &errOut,
+	}
+
+	code := runLocate(e, []string{"anything"})
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when the index is missing")
+	}
+	msg := errOut.String()
+	if !strings.Contains(msg, "vektix index") || !strings.Contains(msg, "vektix reindex") {
+		t.Errorf("missing-manifest error should point at 'vektix index'/'vektix reindex'; got: %s", msg)
+	}
+}

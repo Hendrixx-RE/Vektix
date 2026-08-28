@@ -12,6 +12,10 @@ import (
 // RenderConfig holds options for rendering.
 type RenderConfig struct {
 	HeaderRankInfo string // e.g., "(bm25+vec, rank 1)"
+	// NoColor suppresses the ANSI highlight around the matched span. Callers that
+	// emit machine-readable output (--json), write to the clipboard, or render to a
+	// non-terminal must set it; escape codes there are corruption, not decoration.
+	NoColor bool
 }
 
 // Render formats the expanded text with a header, line numbers, a gutter, and highlights the matched span.
@@ -50,6 +54,11 @@ func Render(chunk store.Chunk, expandedText string, loc store.Locator, cfg Rende
 		// Fallback if not found (shouldn't happen in normal flow)
 		matchStart = -1
 		matchEnd = -1
+	}
+
+	highlightOn, highlightOff := "\x1b[33m", "\x1b[0m" // yellow
+	if cfg.NoColor {
+		highlightOn, highlightOff = "", ""
 	}
 
 	lines := strings.Split(expandedText, "\n")
@@ -95,9 +104,9 @@ func Render(chunk store.Chunk, expandedText string, loc store.Locator, cfg Rende
 			relEnd := intersectEnd - lineStart
 
 			buf.WriteString(line[:relStart])
-			buf.WriteString("\x1b[33m") // Yellow
+			buf.WriteString(highlightOn)
 			buf.WriteString(line[relStart:relEnd])
-			buf.WriteString("\x1b[0m") // Reset
+			buf.WriteString(highlightOff)
 			buf.WriteString(line[relEnd:])
 		} else {
 			// No intersection
