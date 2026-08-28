@@ -38,8 +38,9 @@ func NewRootIgnorer(cfg *config.ExcludeConfig, rootDir string) *Ignorer {
 // Returning a new node is safer.
 func (ig *Ignorer) Push(dir string) *Ignorer {
 	child := &Ignorer{
-		parent: ig,
-		dir:    dir,
+		cfgExclude: ig.cfgExclude,
+		parent:     ig,
+		dir:        dir,
 	}
 	
 	ignorePath := filepath.Join(dir, ".vektixignore")
