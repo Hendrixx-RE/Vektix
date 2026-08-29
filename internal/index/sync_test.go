@@ -489,3 +489,143 @@ func TestPipeline_BoundedChannelsNoDeadlock(t *testing.T) {
 		t.Fatalf("counts: scanned=%d indexed=%d chunks=%d, want %d", res.Scanned, res.Indexed, res.Chunks, n)
 	}
 }
+
+// TestPipeline_ReindexRebuildsFromScratch tests that ModeReindex purges
+// previous chunks and adopts a new model identity.
+func TestPipeline_ReindexRebuildsFromScratch(t *testing.T) {
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "doc.txt"), "Testing reindex functionality from scratch.")
+
+	ts := newMockEmbedServer(t, 4, nil)
+	defer ts.Close()
+	client := ollama.NewClient(ollama.Options{Host: ts.URL, EmbedTimeout: 5 * time.Second})
+	st := newTestStore(t)
+	dataDir := t.TempDir()
+
+	e1 := &Engine{
+		Store:    st,
+		Embedder: client,
+		IndexCfg: testIndexConfig(),
+		Identity: DefaultIdentity("model-v1"),
+		DataDir:  dataDir,
+	}
+
+	res1, err := e1.Run(context.Background(), []string{root}, ModeIndex)
+	if err != nil {
+		t.Fatalf("initial index: %v", err)
+	}
+	if res1.Indexed != 1 {
+		t.Fatalf("expected 1 file indexed, got %d", res1.Indexed)
+	}
+
+	// Now run reindex with a new model
+	e2 := &Engine{
+		Store:    st,
+		Embedder: client,
+		IndexCfg: testIndexConfig(),
+		Identity: DefaultIdentity("model-v2"),
+		DataDir:  dataDir,
+	}
+
+	res2, err := e2.Run(context.Background(), []string{root}, ModeReindex)
+	if err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+	if res2.Removed != 1 {
+		t.Errorf("expected 1 file removed during reindex, got %d", res2.Removed)
+	}
+	if res2.Indexed != 1 {
+		t.Errorf("expected 1 file re-indexed, got %d", res2.Indexed)
+	}
+
+	m, err := LoadManifest(ManifestPath(dataDir))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if m.EmbeddingModel != "model-v2" {
+		t.Errorf("expected manifest model 'model-v2', got %s", m.EmbeddingModel)
+	}
+}
+
+// TestPipeline_FileUpdateReplacesChunks tests that modifying a file replaces
+// its old chunks cleanly.
+func TestPipeline_FileUpdateReplacesChunks(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "update.txt")
+	mustWriteFile(t, filePath, "Initial version of file with some words.")
+
+	ts := newMockEmbedServer(t, 4, nil)
+	defer ts.Close()
+	client := ollama.NewClient(ollama.Options{Host: ts.URL, EmbedTimeout: 5 * time.Second})
+	st := newTestStore(t)
+	dataDir := t.TempDir()
+
+	e := &Engine{
+		Store:    st,
+		Embedder: client,
+		IndexCfg: testIndexConfig(),
+		Identity: DefaultIdentity("mock-model"),
+		DataDir:  dataDir,
+	}
+
+	res1, err := e.Run(context.Background(), []string{root}, ModeIndex)
+	if err != nil {
+		t.Fatalf("initial run: %v", err)
+	}
+	if res1.Added != 1 {
+		t.Fatalf("expected 1 added, got %d", res1.Added)
+	}
+
+	// Update the file content and mtime
+	time.Sleep(10 * time.Millisecond)
+	mustWriteFile(t, filePath, "Updated version with completely different content.")
+
+	res2, err := e.Run(context.Background(), []string{root}, ModeIndex)
+	if err != nil {
+		t.Fatalf("update run: %v", err)
+	}
+	if res2.Updated != 1 {
+		t.Fatalf("expected 1 updated, got %d", res2.Updated)
+	}
+	if res2.Unchanged != 0 {
+		t.Fatalf("expected 0 unchanged, got %d", res2.Unchanged)
+	}
+}
+
+// TestPipeline_MultipleRoots tests indexing across multiple directories.
+func TestPipeline_MultipleRoots(t *testing.T) {
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+	mustWriteFile(t, filepath.Join(root1, "r1.txt"), "Root 1 file content.")
+	mustWriteFile(t, filepath.Join(root2, "r2.txt"), "Root 2 file content.")
+
+	ts := newMockEmbedServer(t, 4, nil)
+	defer ts.Close()
+	client := ollama.NewClient(ollama.Options{Host: ts.URL, EmbedTimeout: 5 * time.Second})
+	st := newTestStore(t)
+	dataDir := t.TempDir()
+
+	e := &Engine{
+		Store:    st,
+		Embedder: client,
+		IndexCfg: testIndexConfig(),
+		Identity: DefaultIdentity("mock-model"),
+		DataDir:  dataDir,
+	}
+
+	res, err := e.Run(context.Background(), []string{root1, root2}, ModeIndex)
+	if err != nil {
+		t.Fatalf("multi-root run: %v", err)
+	}
+	if res.Scanned != 2 || res.Indexed != 2 {
+		t.Fatalf("expected 2 scanned and indexed, got %d / %d", res.Scanned, res.Indexed)
+	}
+
+	m, err := LoadManifest(ManifestPath(dataDir))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if len(m.Roots) != 2 {
+		t.Errorf("expected 2 roots in manifest, got %d", len(m.Roots))
+	}
+}

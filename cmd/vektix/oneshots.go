@@ -37,9 +37,6 @@ import (
 )
 
 const (
-	manifestFileName = "manifest.json"
-	storeDirName     = "db"
-
 	// A result found by a single arm at a low rank is dropped from the strong
 	// set (plan.md's "minimum-arms rule") and offered as a weak match instead.
 	singleArmRankCutoff = 5
@@ -139,6 +136,7 @@ func excerptCmd(args []string) { dispatch(runExcerpt, args) }
 func openCmd(args []string)    { dispatch(runOpen, args) }
 func copyCmd(args []string)    { dispatch(runCopy, args) }
 func listCmd(args []string)    { dispatch(runList, args) }
+func statusCmd(args []string)  { dispatch(runStatus, args) }
 
 // ---------------------------------------------------------------------------
 // corpus: the index, loaded once per invocation
@@ -172,7 +170,7 @@ func (e *env) corpus() (*corpus, error) {
 }
 
 func (e *env) loadCorpus() (*corpus, error) {
-	manifestPath := filepath.Join(e.dataDir, manifestFileName)
+	manifestPath := index.ManifestPath(e.dataDir)
 	m, err := index.LoadManifest(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -184,7 +182,7 @@ func (e *env) loadCorpus() (*corpus, error) {
 		return nil, err
 	}
 
-	db, err := store.NewPersistentDB(filepath.Join(e.dataDir, storeDirName))
+	db, err := store.NewPersistentDB(index.StorePath(e.dataDir))
 	if err != nil {
 		return nil, fmt.Errorf("opening the vector store: %w (run 'vektix reindex' to rebuild)", err)
 	}
@@ -1358,4 +1356,138 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// ---------------------------------------------------------------------------
+// status
+// ---------------------------------------------------------------------------
+
+func runStatus(e *env, args []string) int {
+	fl := &oneShotFlags{}
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(e.stderr)
+	fl.registerCommon(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	sc := e.resolveActiveScope(fl)
+
+	manifestPath := index.ManifestPath(e.dataDir)
+	manifestInfo, manifestStatErr := os.Stat(manifestPath)
+	hasManifest := manifestStatErr == nil
+
+	quarantine, _ := index.LoadQuarantine(index.QuarantinePath(e.dataDir))
+
+	var dbLoadTime time.Duration
+	var dbCount int
+	var dbErr error
+
+	if hasManifest {
+		dbStart := time.Now()
+		db, err := store.NewPersistentDB(index.StorePath(e.dataDir))
+		if err != nil {
+			dbErr = err
+		} else {
+			dbLoadTime = time.Since(dbStart)
+			dbCount = db.Count()
+		}
+	}
+
+	if fl.jsonOut {
+		payload := map[string]any{
+			"command":    "status",
+			"data_dir":   e.dataDir,
+			"has_index":  sc.HasIndex,
+			"scope":      sc.payload(),
+			"quarantine": quarantine,
+		}
+		if quarantine == nil {
+			payload["quarantine"] = []index.QuarantineEntry{}
+		}
+
+		if c, err := e.corpus(); err == nil && c.manifest != nil {
+			m := c.manifest
+			manifestMap := map[string]any{
+				"embedding_model": m.EmbeddingModel,
+				"dim":             m.Dim,
+				"prefix_scheme":   m.PrefixScheme,
+				"chunker_version": m.ChunkerVersion,
+				"total_files":     len(m.Files),
+				"total_chunks":    len(c.chunks),
+				"roots":           m.Roots,
+			}
+			if hasManifest {
+				manifestMap["last_sync"] = manifestInfo.ModTime().UTC().Format(time.RFC3339)
+			}
+			payload["manifest"] = manifestMap
+			dbMap := map[string]any{
+				"path":         index.StorePath(e.dataDir),
+				"load_time_ms": dbLoadTime.Milliseconds(),
+				"chunk_count":  dbCount,
+			}
+			if dbErr != nil {
+				dbMap["error"] = dbErr.Error()
+			}
+			payload["db"] = dbMap
+		} else if sc.IndexError != "" {
+			payload["index_error"] = sc.IndexError
+		}
+
+		return e.emitJSON(payload)
+	}
+
+	fmt.Fprintln(e.stdout, "Vektix Status")
+	fmt.Fprintln(e.stdout, "=============")
+	fmt.Fprintf(e.stdout, "Data Directory: %s\n", displayPath(e.dataDir))
+
+	if !sc.HasIndex {
+		fmt.Fprintf(e.stdout, "Index:          No index found (run 'vektix index <dir>' to index files)\n")
+	} else {
+		c, _ := e.corpus()
+		m := c.manifest
+		fmt.Fprintf(e.stdout, "Index Chunks:   %s (%d files)\n", humanInt(len(c.chunks)), len(m.Files))
+		fmt.Fprintf(e.stdout, "Model:          %s (%d-dim, %s)\n", m.EmbeddingModel, m.Dim, m.PrefixScheme)
+		fmt.Fprintf(e.stdout, "Chunker:        version %d\n", m.ChunkerVersion)
+		if hasManifest {
+			fmt.Fprintf(e.stdout, "Last Sync:      %s (%s ago)\n",
+				manifestInfo.ModTime().Local().Format("2006-01-02 15:04:05"),
+				formatDuration(time.Since(manifestInfo.ModTime())))
+		}
+		fmt.Fprintln(e.stdout, "Indexed Roots:")
+		if len(m.Roots) == 0 {
+			fmt.Fprintln(e.stdout, "  (none)")
+		} else {
+			for _, r := range m.Roots {
+				count := m.DirCounts[r]
+				fmt.Fprintf(e.stdout, "  - %s (%s chunks)\n", displayPath(r), humanInt(count))
+			}
+		}
+		if dbErr == nil {
+			fmt.Fprintf(e.stdout, "DB Load Time:   %s (%s chunks resident)\n", formatDuration(dbLoadTime), humanInt(dbCount))
+		}
+	}
+
+	fmt.Fprintf(e.stdout, "Active Scope:   %s\n", sc.describe())
+	if sc.Unindexed {
+		fmt.Fprintf(e.stdout, "                (CWD %s is not under any indexed root)\n", displayPath(e.cwd))
+	}
+
+	if len(quarantine) > 0 {
+		fmt.Fprintf(e.stdout, "Quarantine:     %d quarantined file(s):\n", len(quarantine))
+		for _, q := range quarantine {
+			fmt.Fprintf(e.stdout, "  - %s: %s (%s)\n", displayPath(q.Path), q.Reason, q.Time.Local().Format("2006-01-02 15:04"))
+		}
+	} else {
+		fmt.Fprintln(e.stdout, "Quarantine:     clean (0 files)")
+	}
+
+	return 0
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
