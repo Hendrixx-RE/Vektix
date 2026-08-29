@@ -20,20 +20,34 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
+	"github.com/Hendrixx-RE/Vektix/internal/tui"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		tuiCmd(nil)
+		return
 	}
 
 	command := os.Args[1]
 
+	// Check if bare invocation passed flags intended for TUI
+	if strings.HasPrefix(command, "-") {
+		if command == "-h" || command == "--help" || command == "-help" {
+			printUsage()
+			return
+		}
+		tuiCmd(os.Args[1:])
+		return
+	}
+
 	// Setup basic flag sets for each subcommand if needed
 	switch command {
+	case "tui":
+		tuiCmd(os.Args[2:])
 	case "setup":
 		setupCmd(os.Args[2:])
 	case "doctor":
@@ -62,6 +76,8 @@ func main() {
 		evalCmd(os.Args[2:])
 	case "version":
 		fmt.Printf("vektix version %s\n", version)
+	case "help":
+		printUsage()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -73,9 +89,10 @@ func printUsage() {
 	fmt.Printf(`Vektix — A local, privacy-first file locator
 
 Usage:
-  vektix <command> [arguments]
+  vektix [command] [arguments]
 
 Commands:
+  tui       Launch interactive TUI (default when run with no arguments)
   setup     Initialize Vektix and prepare models
   doctor    Check system health and dependencies
   index     Index local files and directories
@@ -91,6 +108,36 @@ Commands:
   eval      Run evaluation suite
   version   Print version information
 `)
+}
+
+func tuiCmd(args []string) {
+	fs := flag.NewFlagSet("tui", flag.ExitOnError)
+	scope := fs.String("scope", "", "confine search to this directory")
+	global := fs.Bool("global", false, "search the whole index globally")
+	fs.BoolVar(global, "g", false, "shorthand for --global")
+	_ = fs.Parse(args)
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	app, err := tui.New(tui.Options{
+		Config: &cfg,
+		Scope:  *scope,
+		Global: *global,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing TUI: %v\n", err)
+		os.Exit(1)
+	}
+
+	p := tea.NewProgram(app, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func checkOllamaReachable(host string) error {

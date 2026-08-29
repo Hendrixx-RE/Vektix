@@ -90,11 +90,16 @@ internal/
     text.go               Line-numbered plain text/markdown parsing.
     pdf.go               ledongthuc/pdf, isolated in a goroutine with recover() and context-
                          aware cancellation — a malformed PDF must never abort a run.
-  session/refs.go         Empty stub.
+  session/refs.go         Session result tracking + ordinal/pronoun reference resolution.
   eval/{runner,metrics}.go   Empty stubs. The real interim intent-eval tool is
                          scripts/eval_intent.go (see README's Development tooling).
-  tui/*.go               Every file is a one-line package stub. Bubble Tea/Lip Gloss/Bubbles/
-                         Glamour are not in go.mod yet.
+  tui/
+    app.go                Root Bubble Tea model (Init/Update/View), query loop, keybinds.
+    chat.go               Query and result view rendering, action bar, explain blocks.
+    picker.go             Ambiguous-match chooser for multiple candidate results.
+    status.go             Status bar showing active scope, chunk counts, and global toggle.
+    index.go              Indexing progress view for in-app index/sync runs.
+    styles.go             Lip Gloss theme and styling definitions.
 scripts/                 Dev-only tooling, not part of the vektix binary. gen_cases.py
                          generates testdata/intent_eval.jsonl; eval_intent.go runs it against
                          a live Ollama.
