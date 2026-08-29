@@ -393,9 +393,9 @@ func TestStatus_NoIndex(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit 0 for status with no index, got %d", code)
 	}
-	str := out.String()
-	if !strings.Contains(str, "No index found") {
-		t.Errorf("expected 'No index found', got: %s", str)
+	str := strings.ToLower(out.String())
+	if !strings.Contains(str, "no index found") {
+		t.Errorf("expected 'no index found', got: %s", out.String())
 	}
 }
 
@@ -449,5 +449,54 @@ func TestStatus_Quarantine(t *testing.T) {
 	}
 	if !strings.Contains(str, "corrupt.pdf") {
 		t.Errorf("expected corrupt.pdf in status, got: %s", str)
+	}
+}
+
+// TestStatus_ManifestMismatch tests that a manifest failing validity checks
+// surfaces the specific mismatch error instead of "No index found".
+func TestStatus_ManifestMismatch(t *testing.T) {
+	f := newFixture(t)
+	m := &index.Manifest{
+		EmbeddingModel: "different-model",
+		Dim:            4,
+		PrefixScheme:   "v1",
+		ChunkerVersion: 1,
+		Files:          map[string]index.FileMeta{},
+		DirCounts:      map[string]int{},
+	}
+	if err := m.SaveManifest(index.ManifestPath(f.dataDir)); err != nil {
+		t.Fatal(err)
+	}
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runStatus(e, nil)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for status, got %d", code)
+	}
+	str := out.String()
+	if strings.Contains(str, "No index found") {
+		t.Errorf("expected mismatch error instead of 'No index found', got: %s", str)
+	}
+	if !strings.Contains(str, "different-model") {
+		t.Errorf("expected mismatch to mention different-model, got: %s", str)
+	}
+}
+
+// TestStatus_CorruptQuarantine tests that a corrupt quarantine.json surfaces an error
+// instead of silently reporting clean.
+func TestStatus_CorruptQuarantine(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(index.QuarantinePath(f.dataDir), []byte("invalid json {{"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runStatus(e, nil)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for status, got %d", code)
+	}
+	str := out.String()
+	if !strings.Contains(str, "error loading quarantine") {
+		t.Errorf("expected quarantine loading error, got: %s", str)
 	}
 }

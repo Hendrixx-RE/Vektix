@@ -153,6 +153,8 @@ type corpus struct {
 
 	// chunk IDs listed in the manifest but absent from the store
 	missing int
+
+	dbLoadTime time.Duration
 }
 
 var errNoIndex = errors.New("no index found")
@@ -182,12 +184,14 @@ func (e *env) loadCorpus() (*corpus, error) {
 		return nil, err
 	}
 
+	dbStart := time.Now()
 	db, err := store.NewPersistentDB(index.StorePath(e.dataDir))
 	if err != nil {
 		return nil, fmt.Errorf("opening the vector store: %w (run 'vektix reindex' to rebuild)", err)
 	}
+	dbLoadTime := time.Since(dbStart)
 
-	c := &corpus{manifest: m, store: db}
+	c := &corpus{manifest: m, store: db, dbLoadTime: dbLoadTime}
 
 	// Deterministic order: map iteration order must not change the ranking of
 	// two chunks that tie on score.
@@ -1377,22 +1381,9 @@ func runStatus(e *env, args []string) int {
 	manifestInfo, manifestStatErr := os.Stat(manifestPath)
 	hasManifest := manifestStatErr == nil
 
-	quarantine, _ := index.LoadQuarantine(index.QuarantinePath(e.dataDir))
+	quarantine, qErr := index.LoadQuarantine(index.QuarantinePath(e.dataDir))
 
-	var dbLoadTime time.Duration
-	var dbCount int
-	var dbErr error
-
-	if hasManifest {
-		dbStart := time.Now()
-		db, err := store.NewPersistentDB(index.StorePath(e.dataDir))
-		if err != nil {
-			dbErr = err
-		} else {
-			dbLoadTime = time.Since(dbStart)
-			dbCount = db.Count()
-		}
-	}
+	c, corpusErr := e.corpus()
 
 	if fl.jsonOut {
 		payload := map[string]any{
@@ -1405,8 +1396,11 @@ func runStatus(e *env, args []string) int {
 		if quarantine == nil {
 			payload["quarantine"] = []index.QuarantineEntry{}
 		}
+		if qErr != nil {
+			payload["quarantine_error"] = qErr.Error()
+		}
 
-		if c, err := e.corpus(); err == nil && c.manifest != nil {
+		if c != nil && c.manifest != nil {
 			m := c.manifest
 			manifestMap := map[string]any{
 				"embedding_model": m.EmbeddingModel,
@@ -1421,16 +1415,22 @@ func runStatus(e *env, args []string) int {
 				manifestMap["last_sync"] = manifestInfo.ModTime().UTC().Format(time.RFC3339)
 			}
 			payload["manifest"] = manifestMap
-			dbMap := map[string]any{
+		}
+
+		if c != nil && c.store != nil {
+			payload["db"] = map[string]any{
 				"path":         index.StorePath(e.dataDir),
-				"load_time_ms": dbLoadTime.Milliseconds(),
-				"chunk_count":  dbCount,
+				"load_time_ms": c.dbLoadTime.Milliseconds(),
+				"chunk_count":  c.store.Count(),
 			}
-			if dbErr != nil {
-				dbMap["error"] = dbErr.Error()
+		} else if hasManifest && corpusErr != nil {
+			payload["db"] = map[string]any{
+				"path":  index.StorePath(e.dataDir),
+				"error": corpusErr.Error(),
 			}
-			payload["db"] = dbMap
-		} else if sc.IndexError != "" {
+		}
+
+		if sc.IndexError != "" {
 			payload["index_error"] = sc.IndexError
 		}
 
@@ -1442,9 +1442,12 @@ func runStatus(e *env, args []string) int {
 	fmt.Fprintf(e.stdout, "Data Directory: %s\n", displayPath(e.dataDir))
 
 	if !sc.HasIndex {
-		fmt.Fprintf(e.stdout, "Index:          No index found (run 'vektix index <dir>' to index files)\n")
+		if sc.IndexError != "" {
+			fmt.Fprintf(e.stdout, "Index:          %s\n", sc.IndexError)
+		} else {
+			fmt.Fprintf(e.stdout, "Index:          No index found (run 'vektix index <dir>' to index files)\n")
+		}
 	} else {
-		c, _ := e.corpus()
 		m := c.manifest
 		fmt.Fprintf(e.stdout, "Index Chunks:   %s (%d files)\n", humanInt(len(c.chunks)), len(m.Files))
 		fmt.Fprintf(e.stdout, "Model:          %s (%d-dim, %s)\n", m.EmbeddingModel, m.Dim, m.PrefixScheme)
@@ -1463,8 +1466,10 @@ func runStatus(e *env, args []string) int {
 				fmt.Fprintf(e.stdout, "  - %s (%s chunks)\n", displayPath(r), humanInt(count))
 			}
 		}
-		if dbErr == nil {
-			fmt.Fprintf(e.stdout, "DB Load Time:   %s (%s chunks resident)\n", formatDuration(dbLoadTime), humanInt(dbCount))
+		if c != nil && c.store != nil {
+			fmt.Fprintf(e.stdout, "DB Load Time:   %s (%s chunks resident)\n", formatDuration(c.dbLoadTime), humanInt(c.store.Count()))
+		} else if corpusErr != nil {
+			fmt.Fprintf(e.stdout, "DB Load Time:   error loading store: %v\n", corpusErr)
 		}
 	}
 
@@ -1473,7 +1478,9 @@ func runStatus(e *env, args []string) int {
 		fmt.Fprintf(e.stdout, "                (CWD %s is not under any indexed root)\n", displayPath(e.cwd))
 	}
 
-	if len(quarantine) > 0 {
+	if qErr != nil {
+		fmt.Fprintf(e.stdout, "Quarantine:     error loading quarantine: %v\n", qErr)
+	} else if len(quarantine) > 0 {
 		fmt.Fprintf(e.stdout, "Quarantine:     %d quarantined file(s):\n", len(quarantine))
 		for _, q := range quarantine {
 			fmt.Fprintf(e.stdout, "  - %s: %s (%s)\n", displayPath(q.Path), q.Reason, q.Time.Local().Format("2006-01-02 15:04"))
