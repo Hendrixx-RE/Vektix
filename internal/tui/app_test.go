@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
 	"github.com/Hendrixx-RE/Vektix/internal/index"
+	"github.com/Hendrixx-RE/Vektix/internal/resolve"
 	"github.com/Hendrixx-RE/Vektix/internal/router"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
@@ -78,13 +80,13 @@ func TestApp_ColonCommands(t *testing.T) {
 	subDir := filepath.Join(app.cwd, "sub")
 	_ = os.MkdirAll(subDir, 0755)
 	app.handleSubmit(":scope " + subDir)
-	if app.scopeState.Global {
+	if app.getScopeState().Global {
 		t.Errorf("expected scoped state after :scope")
 	}
 
 	// 3. :global
 	app.handleSubmit(":global")
-	if !app.scopeState.Global {
+	if !app.getScopeState().Global {
 		t.Errorf("expected global state after :global")
 	}
 
@@ -172,6 +174,12 @@ func TestApp_SearchResultsAndActions(t *testing.T) {
 		t.Errorf("expected copy via 'copy that'")
 	}
 
+	// Test natural language bare digit selection: "2"
+	app.handleSubmit("2")
+	if app.sessionRefs.ActiveIndex() != 1 {
+		t.Errorf("expected active index 1 after selecting '2', got %d", app.sessionRefs.ActiveIndex())
+	}
+
 	// Test that a plain search query like "server" is NOT hijacked as a session ref selection
 	cmd := app.handleSessionReferenceAction("server")
 	if cmd != nil {
@@ -228,10 +236,10 @@ func TestApp_GlobalToggleKey(t *testing.T) {
 
 	// Press 'g' when input is empty to toggle global
 	app.input.SetValue("")
-	wasGlobal := app.scopeState.Global
+	wasGlobal := app.getScopeState().Global
 	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 
-	if app.scopeState.Global == wasGlobal {
+	if app.getScopeState().Global == wasGlobal {
 		t.Errorf("expected scope global state to toggle after 'g'")
 	}
 }
@@ -266,4 +274,110 @@ func TestApp_IndexProgressAndAnimation(t *testing.T) {
 	if app.indexer.Running {
 		t.Errorf("expected indexer running = false after IndexDoneMsg")
 	}
+}
+
+func TestApp_IndexCancelKey(t *testing.T) {
+	app, _, _ := newTestApp(t)
+
+	app.mode = ModeIndexing
+	app.indexer.Running = true
+	canceled := false
+	app.indexer.CancelFn = func() {
+		canceled = true
+	}
+
+	// Press esc during indexing
+	app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if !canceled {
+		t.Errorf("expected cancel function to be called on Esc")
+	}
+	if app.mode != ModeNormal {
+		t.Errorf("expected mode to reset to ModeNormal on Esc, got %v", app.mode)
+	}
+	if app.indexer.Running {
+		t.Errorf("expected indexer running to be false")
+	}
+}
+
+func TestApp_IntentActionExecution(t *testing.T) {
+	app, copiedText, openedPath := newTestApp(t)
+
+	// Create real file in app cwd
+	testFile := filepath.Join(app.cwd, "server.go")
+	_ = os.WriteFile(testFile, []byte("package main\n\nfunc Run() {\n\tprintln(\"hello\")\n}\n"), 0644)
+
+	subDir := filepath.Join(app.cwd, "docs")
+	_ = os.MkdirAll(subDir, 0755)
+	_ = os.WriteFile(filepath.Join(subDir, "readme.md"), []byte("# Readme"), 0644)
+
+	// Set up corpus with test file
+	chunks := []store.Chunk{
+		{ID: "c1", Path: testFile, Content: "package main\nfunc Run()"},
+	}
+	app.setCorpus(&corpusState{
+		manifest:  &index.Manifest{Files: map[string]index.FileMeta{testFile: {Chunks: []string{"c1"}}}},
+		chunks:    chunks,
+		pathIndex: resolve.NewPathIndex(chunks),
+		bm25Index: resolve.NewBM25Index(chunks),
+	})
+
+	// 1. Action: "open server.go"
+	cmd := app.executeIntent("open server.go")
+	msg := cmd()
+	app.Update(msg)
+	if *openedPath != testFile {
+		t.Errorf("expected executeIntent('open server.go') to open %s, got %s", testFile, *openedPath)
+	}
+
+	// 2. Action: "copy server.go"
+	cmd = app.executeIntent("copy server.go")
+	msg = cmd()
+	app.Update(msg)
+	if *copiedText == "" {
+		t.Errorf("expected executeIntent('copy server.go') to copy file content")
+	}
+
+	// 3. Action: "read server.go:1-3"
+	cmd = app.executeIntent("read server.go:1-3")
+	msg = cmd()
+	scMsg, ok := msg.(searchCompleteMsg)
+	if !ok || !strings.Contains(scMsg.Notice, "package main") {
+		t.Errorf("expected executeIntent('read server.go:1-3') to return content, got %+v", msg)
+	}
+
+	// 4. Action: "list docs"
+	cmd = app.executeIntent("list docs")
+	msg = cmd()
+	scMsg, ok = msg.(searchCompleteMsg)
+	if !ok || !strings.Contains(scMsg.Notice, "readme.md") {
+		t.Errorf("expected executeIntent('list docs') to list readme.md, got %+v", msg)
+	}
+}
+
+func TestApp_ConcurrentLoadCorpusAndSearch(t *testing.T) {
+	app, _, _ := newTestApp(t)
+
+	// Set test corpus data
+	app.setCorpus(&corpusState{
+		manifest: &index.Manifest{},
+		chunks: []store.Chunk{
+			{ID: "c1", Path: "/a/b.go", Content: "package b"},
+		},
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			cmd := app.executeIntent("package b")
+			_ = cmd()
+		}()
+		go func() {
+			defer wg.Done()
+			app.loadCorpus()
+		}()
+	}
+	wg.Wait()
 }

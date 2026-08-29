@@ -81,7 +81,8 @@ func (m *IndexModel) Start(cfg *config.Config, roots []string, mode index.Mode) 
 	m.Progress = index.Progress{}
 	m.Result = nil
 	m.Err = nil
-	m.StartTime = time.Now()
+	startTime := time.Now()
+	m.StartTime = startTime
 	m.Elapsed = 0
 	m.SpinnerIndex = 0
 	m.progChan = make(chan index.Progress, 128)
@@ -96,16 +97,16 @@ func (m *IndexModel) Start(cfg *config.Config, roots []string, mode index.Mode) 
 
 		dataDir, err := config.ExpandPath(cfg.General.DataDir)
 		if err != nil {
-			return IndexDoneMsg{Err: fmt.Errorf("resolving data_dir: %w", err), Elapsed: time.Since(m.StartTime)}
+			return IndexDoneMsg{Err: fmt.Errorf("resolving data_dir: %w", err), Elapsed: time.Since(startTime)}
 		}
 
 		if err := os.MkdirAll(dataDir, 0755); err != nil {
-			return IndexDoneMsg{Err: fmt.Errorf("creating data_dir %s: %w", dataDir, err), Elapsed: time.Since(m.StartTime)}
+			return IndexDoneMsg{Err: fmt.Errorf("creating data_dir %s: %w", dataDir, err), Elapsed: time.Since(startTime)}
 		}
 
 		st, err := store.NewPersistentDB(index.StorePath(dataDir))
 		if err != nil {
-			return IndexDoneMsg{Err: fmt.Errorf("opening vector store: %w", err), Elapsed: time.Since(m.StartTime)}
+			return IndexDoneMsg{Err: fmt.Errorf("opening vector store: %w", err), Elapsed: time.Since(startTime)}
 		}
 
 		cli := ollama.NewClient(ollama.Options{
@@ -122,7 +123,7 @@ func (m *IndexModel) Start(cfg *config.Config, roots []string, mode index.Mode) 
 		}
 
 		res, runErr := engine.Run(ctx, roots, mode)
-		elapsed := time.Since(m.StartTime)
+		elapsed := time.Since(startTime)
 
 		return IndexDoneMsg{
 			Result:  res,
@@ -135,22 +136,22 @@ func (m *IndexModel) Start(cfg *config.Config, roots []string, mode index.Mode) 
 }
 
 // Update processes index-related events and keypresses.
-func (m IndexModel) Update(msg tea.Msg) (IndexModel, tea.Cmd) {
+func (m *IndexModel) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case IndexProgressMsg:
 		m.Progress = msg.Progress
 		if m.Running && m.progChan != nil {
-			return m, listenProgress(m.progChan)
+			return listenProgress(m.progChan)
 		}
-		return m, nil
+		return nil
 
 	case IndexTickMsg:
 		if m.Running {
 			m.SpinnerIndex++
 			m.Elapsed = time.Since(m.StartTime)
-			return m, tickSpinnerCmd()
+			return tickSpinnerCmd()
 		}
-		return m, nil
+		return nil
 
 	case IndexDoneMsg:
 		m.Running = false
@@ -161,7 +162,7 @@ func (m IndexModel) Update(msg tea.Msg) (IndexModel, tea.Cmd) {
 			m.CancelFn()
 			m.CancelFn = nil
 		}
-		return m, nil
+		return nil
 
 	case tea.KeyMsg:
 		if msg.String() == "esc" || msg.String() == "q" {
@@ -173,7 +174,7 @@ func (m IndexModel) Update(msg tea.Msg) (IndexModel, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	return nil
 }
 
 // View renders the indexing card with stats and status.

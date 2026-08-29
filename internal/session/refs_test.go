@@ -50,6 +50,10 @@ func TestSessionRefs_Resolution(t *testing.T) {
 		{"2nd", 1, "/path/to/resume.pdf"},
 		{"3rd", 2, "/path/to/config.yaml"},
 		{"4th", 3, "/path/to/notes.md"},
+		{"1", 0, "/path/to/main.go"},
+		{"2", 1, "/path/to/resume.pdf"},
+		{"3", 2, "/path/to/config.yaml"},
+		{"4", 3, "/path/to/notes.md"},
 		// Demonstrative file qualifiers
 		{"that pdf", 1, "/path/to/resume.pdf"},
 		{"the pdf", 1, "/path/to/resume.pdf"},
@@ -73,6 +77,17 @@ func TestSessionRefs_Resolution(t *testing.T) {
 				t.Errorf("ref %q: expected path %q, got %q", tc.ref, tc.wantPath, item.Path)
 			}
 		})
+	}
+
+	// Test active index pronoun resolution
+	s.SetActiveIndex(1)
+	if it, idx, ok := s.ResolveRef("it"); !ok || idx != 1 || it.Path != "/path/to/resume.pdf" {
+		t.Errorf("expected pronoun 'it' to resolve to active index 1 (resume.pdf), got %+v, %d", it, idx)
+	}
+
+	s.SetActiveIndex(2)
+	if it, idx, ok := s.ResolveRef("selected"); !ok || idx != 2 || it.Path != "/path/to/config.yaml" {
+		t.Errorf("expected pronoun 'selected' to resolve to active index 2 (config.yaml), got %+v, %d", it, idx)
 	}
 
 	// Bare terms should NOT match as session references (prevents query hijacking)
@@ -106,8 +121,8 @@ func TestSessionRefs_Resolution(t *testing.T) {
 
 func TestSessionRefs_IsExplicitRef(t *testing.T) {
 	validRefs := []string{
-		"it", "that", "this", "the file", "the match",
-		"the first one", "first", "the second one", "second", "#1", "#2", "1st", "2nd", "last",
+		"it", "that", "this", "the file", "the match", "selected", "current",
+		"the first one", "first", "the second one", "second", "#1", "#2", "1", "2", "1st", "2nd", "last",
 		"that pdf", "the go file", "that server.go",
 	}
 	for _, r := range validRefs {

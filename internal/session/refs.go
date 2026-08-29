@@ -27,14 +27,16 @@ type Item struct {
 // natural-language ordinal and pronoun references ("open the first one",
 // "copy that", "#2", "that pdf").
 type Store struct {
-	items     []Item
-	lastQuery string
+	items       []Item
+	lastQuery   string
+	activeIndex int
 }
 
 // NewStore initializes a new session store.
 func NewStore() *Store {
 	return &Store{
-		items: make([]Item, 0),
+		items:       make([]Item, 0),
+		activeIndex: 0,
 	}
 }
 
@@ -43,6 +45,7 @@ func (s *Store) Set(query string, items []Item) {
 	s.lastQuery = query
 	s.items = make([]Item, len(items))
 	copy(s.items, items)
+	s.activeIndex = 0
 }
 
 // Items returns a copy of the current result items.
@@ -62,6 +65,18 @@ func (s *Store) LastQuery() string {
 	return s.lastQuery
 }
 
+// ActiveIndex returns the currently cycled result index.
+func (s *Store) ActiveIndex() int {
+	return s.activeIndex
+}
+
+// SetActiveIndex sets the currently cycled result index.
+func (s *Store) SetActiveIndex(idx int) {
+	if idx >= 0 && idx < len(s.items) {
+		s.activeIndex = idx
+	}
+}
+
 // Get returns the item at 0-indexed position idx.
 func (s *Store) Get(idx int) (*Item, bool) {
 	if idx < 0 || idx >= len(s.items) {
@@ -77,6 +92,7 @@ func (s *Store) Get(idx int) (*Item, bool) {
 func (s *Store) Clear() {
 	s.items = make([]Item, 0)
 	s.lastQuery = ""
+	s.activeIndex = 0
 }
 
 var (
@@ -142,7 +158,7 @@ var extMap = map[string]string{
 }
 
 // IsExplicitRef tests whether a string is an explicit ordinal, pronoun, or
-// demonstrative qualifier reference (e.g. "it", "#2", "the third one", "that pdf").
+// demonstrative qualifier reference (e.g. "it", "2", "#2", "the third one", "that pdf").
 // Plain words like "resume" or "server" return false so they are never hijacked.
 func IsExplicitRef(ref string) bool {
 	norm := strings.ToLower(strings.TrimSpace(ref))
@@ -166,13 +182,8 @@ func IsExplicitRef(ref string) bool {
 		return true
 	}
 
-	if strings.HasPrefix(norm, "#") {
-		return true
-	}
-
 	if m := hashNumberRe.FindStringSubmatch(cleanOrdinal); len(m) == 2 {
-		if strings.HasSuffix(cleanOrdinal, "st") || strings.HasSuffix(cleanOrdinal, "nd") ||
-			strings.HasSuffix(cleanOrdinal, "rd") || strings.HasSuffix(cleanOrdinal, "th") {
+		if n, err := strconv.Atoi(m[1]); err == nil && n >= 1 && n <= 99 {
 			return true
 		}
 	}
@@ -185,7 +196,7 @@ func IsExplicitRef(ref string) bool {
 }
 
 // ResolveRef attempts to resolve a reference string (such as "it", "that",
-// "#2", "the third one", "that pdf", "last") to an Item in the session.
+// "#2", "2", "the third one", "that pdf", "last") to an Item in the session.
 // It returns the resolved item, its 0-based index, and true if found.
 func (s *Store) ResolveRef(ref string) (*Item, int, bool) {
 	if len(s.items) == 0 {
@@ -198,10 +209,14 @@ func (s *Store) ResolveRef(ref string) (*Item, int, bool) {
 		return nil, -1, false
 	}
 
-	// 1. Direct pronouns referring to the top/current result
+	// 1. Direct pronouns referring to the active/selected result
 	if explicitPronouns[norm] {
-		item := s.items[0]
-		return &item, 0, true
+		idx := s.activeIndex
+		if idx < 0 || idx >= len(s.items) {
+			idx = 0
+		}
+		item := s.items[idx]
+		return &item, idx, true
 	}
 
 	// 2. "the last one" / "last" / "last one"

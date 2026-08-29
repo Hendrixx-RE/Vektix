@@ -19,7 +19,7 @@ func TestPickerModel_NavigationAndSelection(t *testing.T) {
 		{Rank: 3, Path: "/path/to/third.go", Locator: store.Locator{Kind: store.LocatorLineRange, Start: 40, End: 50}},
 	}
 
-	p.Open(items, 80, 24)
+	p.Open(0, items, 80, 24)
 	if !p.Active || len(p.Items) != 3 {
 		t.Fatalf("expected 3 items and active picker")
 	}
@@ -69,14 +69,14 @@ func TestPickerModel_NavigationAndSelection(t *testing.T) {
 	}
 
 	// Reopen and test quick pick with number key '2'
-	p.Open(items, 80, 24)
+	p.Open(0, items, 80, 24)
 	p, _, chosen, ok = p.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	if !ok || chosen == nil || chosen.Path != "/path/to/second.go" {
 		t.Errorf("expected key '2' to choose second item, got %+v", chosen)
 	}
 
 	// Reopen and test cancellation with Esc
-	p.Open(items, 80, 24)
+	p.Open(0, items, 80, 24)
 	p, _, chosen, ok = p.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if ok || chosen != nil || p.Active {
 		t.Errorf("expected Esc to cancel and close picker")
@@ -93,7 +93,7 @@ func TestPickerModel_ViewRendering(t *testing.T) {
 	items := []PickerItem{
 		{Rank: 1, Path: "/path/to/main.go", Locator: store.Locator{Kind: store.LocatorLineRange, Start: 10, End: 20}, Arms: []string{"path", "bm25"}},
 	}
-	p.Open(items, 80, 24)
+	p.Open(0, items, 80, 24)
 	view := p.View(80, theme)
 	if view == "" {
 		t.Errorf("expected rendered picker box")

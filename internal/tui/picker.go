@@ -24,29 +24,32 @@ type PickerItem struct {
 
 // PickerModel manages keyboard selection among multiple candidate search results.
 type PickerModel struct {
-	Items  []PickerItem
-	Cursor int
-	Active bool
-	Width  int
-	Height int
+	Items              []PickerItem
+	Cursor             int
+	Active             bool
+	Width              int
+	Height             int
+	TargetHistoryIndex int
 }
 
 // NewPickerModel creates an inactive picker.
 func NewPickerModel() PickerModel {
 	return PickerModel{
-		Items:  make([]PickerItem, 0),
-		Cursor: 0,
-		Active: false,
+		Items:              make([]PickerItem, 0),
+		Cursor:             0,
+		Active:             false,
+		TargetHistoryIndex: -1,
 	}
 }
 
-// Open activates the picker with the provided candidate items.
-func (p *PickerModel) Open(items []PickerItem, width, height int) {
+// Open activates the picker with the provided candidate items and target entry index.
+func (p *PickerModel) Open(targetHistoryIndex int, items []PickerItem, width, height int) {
 	p.Items = items
 	p.Cursor = 0
 	p.Active = len(items) > 0
 	p.Width = width
 	p.Height = height
+	p.TargetHistoryIndex = targetHistoryIndex
 }
 
 // Close deactivates the picker.
@@ -54,6 +57,7 @@ func (p *PickerModel) Close() {
 	p.Active = false
 	p.Items = nil
 	p.Cursor = 0
+	p.TargetHistoryIndex = -1
 }
 
 // Selected returns the currently highlighted candidate.

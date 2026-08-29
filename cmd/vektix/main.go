@@ -22,26 +22,52 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 	"github.com/Hendrixx-RE/Vektix/internal/tui"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-isatty"
 )
 
 var version = "dev"
 
+func isTTY() bool {
+	return isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+}
+
+func isTUIFlag(cmd string) bool {
+	return cmd == "-g" || cmd == "--global" || cmd == "-global" ||
+		cmd == "--scope" || cmd == "-scope" ||
+		strings.HasPrefix(cmd, "--scope=") || strings.HasPrefix(cmd, "-scope=") ||
+		strings.HasPrefix(cmd, "--global=") || strings.HasPrefix(cmd, "-global=")
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		tuiCmd(nil)
-		return
+		if isTTY() {
+			tuiCmd(nil)
+			return
+		}
+		printUsage()
+		os.Exit(1)
 	}
 
 	command := os.Args[1]
 
-	// Check if bare invocation passed flags intended for TUI
-	if strings.HasPrefix(command, "-") {
-		if command == "-h" || command == "--help" || command == "-help" {
-			printUsage()
+	// Handle standard help and version flags
+	if command == "-h" || command == "--help" || command == "-help" || command == "help" {
+		printUsage()
+		return
+	}
+	if command == "-v" || command == "--version" || command == "-version" || command == "version" {
+		fmt.Printf("vektix version %s\n", version)
+		return
+	}
+
+	// Handle TUI flags when invoked without explicit "tui" subcommand
+	if isTUIFlag(command) {
+		if isTTY() {
+			tuiCmd(os.Args[1:])
 			return
 		}
-		tuiCmd(os.Args[1:])
-		return
+		printUsage()
+		os.Exit(1)
 	}
 
 	// Setup basic flag sets for each subcommand if needed
@@ -74,10 +100,6 @@ func main() {
 		statusCmd(os.Args[2:])
 	case "eval":
 		evalCmd(os.Args[2:])
-	case "version":
-		fmt.Printf("vektix version %s\n", version)
-	case "help":
-		printUsage()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -123,10 +145,12 @@ func tuiCmd(args []string) {
 		os.Exit(1)
 	}
 
+	cwd, _ := os.Getwd()
 	app, err := tui.New(tui.Options{
-		Config: &cfg,
-		Scope:  *scope,
-		Global: *global,
+		Config:      &cfg,
+		Cwd:         cwd,
+		ScopeTarget: *scope,
+		Global:      *global,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing TUI: %v\n", err)

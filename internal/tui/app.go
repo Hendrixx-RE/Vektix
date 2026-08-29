@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/clipboard"
@@ -43,46 +45,8 @@ const (
 	ModeIndexing
 )
 
-// Messages used by the Bubble Tea loop
-type searchCompleteMsg struct {
-	Query     string
-	Intent    *router.Intent
-	Results   []SearchResult
-	Weak      []SearchResult
-	Notice    string
-	ErrorMsg  string
-	Warnings  []string
-	Timestamp time.Time
-}
-
-type explainChunkMsg struct {
-	EntryIndex int
-	Chunk      string
-}
-
-type explainDoneMsg struct {
-	EntryIndex int
-	FullText   string
-}
-
-type explainErrMsg struct {
-	EntryIndex int
-	Err        error
-}
-
-type statusFlashMsg struct {
-	Message string
-	IsError bool
-}
-
-// AppModel is the root Bubble Tea model for the Vektix interactive TUI.
-type AppModel struct {
-	cfg         *config.Config
-	dataDir     string
-	cwd         string
-	scopeState  ScopeState
-	scopePinned string // explicit :scope override if set
-
+// corpusState holds the thread-safe snapshot of index structures.
+type corpusState struct {
 	manifest     *index.Manifest
 	store        *store.Store
 	chunks       []store.Chunk
@@ -91,185 +55,303 @@ type AppModel struct {
 	vectorArm    *resolve.VectorArm
 	ollamaClient *ollama.Client
 	embedCache   *ollama.EmbeddingCache
+}
 
+type corpusHolder struct {
+	mu         sync.RWMutex
+	state      *corpusState
+	scopeState ScopeState
+}
+
+// AppModel represents the root Elm architecture state for Vektix TUI.
+type AppModel struct {
+	cfg         *config.Config
+	cwd         string
+	width       int
+	height      int
+	mode        AppMode
+	input       textinput.Model
+	viewport    viewport.Model
+	history     []ChatEntry
 	sessionRefs *session.Store
-
-	input    textinput.Model
-	viewport viewport.Model
-	picker   PickerModel
-	indexer  IndexModel
-
-	history []ChatEntry
-	mode    AppMode
-	theme   Theme
-
-	width  int
-	height int
-	ready  bool
-
-	// Seams for testing
-	copyFn func(w io.Writer, text string) (string, error)
-	openFn func(path string, allowUnsafe bool, cfg *config.Config) error
+	picker      PickerModel
+	indexer     IndexModel
+	scopePinned string
+	theme       Theme
+	statusFlash string
+	statusIsErr bool
+	statusTimer time.Time
+	corpus      *corpusHolder
+	copyFn      func(w io.Writer, text string) (string, error)
+	openFn      func(path string, allowUnsafe bool, cfg *config.Config) error
 }
 
-// Options allows configuring the TUI on startup.
+// Options provides initialization options for creating the AppModel.
 type Options struct {
-	Config   *config.Config
-	Cwd      string
-	Scope    string
-	Global   bool
-	CopyFn   func(w io.Writer, text string) (string, error)
-	OpenFn   func(path string, allowUnsafe bool, cfg *config.Config) error
+	Config      *config.Config
+	Cwd         string
+	ScopeTarget string
+	Global      bool
+	CopyFn      func(w io.Writer, text string) (string, error)
+	OpenFn      func(path string, allowUnsafe bool, cfg *config.Config) error
 }
 
-// New creates and initializes a new AppModel.
+// New initializes an AppModel with the provided configuration and options.
 func New(opts Options) (*AppModel, error) {
 	cfg := opts.Config
 	if cfg == nil {
-		c, err := config.Load()
-		if err != nil {
-			return nil, fmt.Errorf("loading config: %w", err)
-		}
+		c := config.DefaultConfig()
 		cfg = &c
 	}
 
-	dataDir, err := config.ExpandPath(cfg.General.DataDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolving data_dir: %w", err)
-	}
-
-	cwd := opts.Cwd
-	if cwd == "" {
-		cwd, err = os.Getwd()
-		if err != nil {
-			return nil, fmt.Errorf("resolving cwd: %w", err)
-		}
-	}
-
 	ti := textinput.New()
-	ti.Placeholder = "Ask in plain English (e.g. 'where is my resume', 'open main.go', ':help')..."
+	ti.Placeholder = "Ask where files are, search passages, or type :help..."
 	ti.Focus()
 	ti.CharLimit = 512
 	ti.Width = 80
 
-	copyFunc := opts.CopyFn
-	if copyFunc == nil {
-		copyFunc = clipboard.CopyTo
-	}
+	vp := viewport.New(80, 20)
 
-	openFunc := opts.OpenFn
-	if openFunc == nil {
-		openFunc = fileops.Open
-	}
+	sessionStore := session.NewStore()
+	theme := DefaultTheme()
 
 	app := &AppModel{
 		cfg:         cfg,
-		dataDir:     dataDir,
-		cwd:         cwd,
-		sessionRefs: session.NewStore(),
+		cwd:         opts.Cwd,
+		mode:        ModeNormal,
 		input:       ti,
+		viewport:    vp,
+		history:     make([]ChatEntry, 0),
+		sessionRefs: sessionStore,
 		picker:      NewPickerModel(),
 		indexer:     NewIndexModel(),
-		mode:        ModeNormal,
-		theme:       DefaultTheme(),
-		copyFn:      copyFunc,
-		openFn:      openFunc,
+		theme:       theme,
+		scopePinned: opts.ScopeTarget,
+		corpus:      &corpusHolder{},
+		copyFn:      opts.CopyFn,
+		openFn:      opts.OpenFn,
+	}
+
+	if app.copyFn == nil {
+		app.copyFn = clipboard.CopyTo
+	}
+	if app.openFn == nil {
+		app.openFn = fileops.Open
 	}
 
 	app.loadCorpus()
-	app.updateScope(opts.Scope, opts.Global)
+	app.updateScope(opts.ScopeTarget, opts.Global)
 
 	return app, nil
 }
 
-func (a *AppModel) countUnder(scope string) int {
-	if scope == "" {
-		return len(a.chunks)
+func (a *AppModel) getCorpus() *corpusState {
+	if a.corpus == nil {
+		return nil
 	}
-	n := 0
-	for _, ch := range a.chunks {
-		if isUnderScope(ch.Path, scope) {
-			n++
-		}
-	}
-	return n
+	a.corpus.mu.RLock()
+	defer a.corpus.mu.RUnlock()
+	return a.corpus.state
 }
 
-func (a *AppModel) updateScope(scopeOverride string, forceGlobal bool) {
-	a.scopePinned = scopeOverride
-	a.scopeState = ResolveScopeState(a.cfg, a.cwd, scopeOverride, forceGlobal, len(a.chunks), a.countUnder)
-	if a.manifest == nil {
-		a.scopeState.HasIndex = false
-		a.scopeState.IndexError = "no index found — run :index <path> or 'vektix index <path>'"
+func (a *AppModel) setCorpus(c *corpusState) {
+	if a.corpus == nil {
+		a.corpus = &corpusHolder{}
+	}
+	a.corpus.mu.Lock()
+	defer a.corpus.mu.Unlock()
+	a.corpus.state = c
+}
+
+func (a *AppModel) getScopeState() ScopeState {
+	if a.corpus == nil {
+		return ScopeState{}
+	}
+	a.corpus.mu.RLock()
+	defer a.corpus.mu.RUnlock()
+	return a.corpus.scopeState
+}
+
+func (a *AppModel) setScopeState(st ScopeState) {
+	if a.corpus != nil {
+		a.corpus.mu.Lock()
+		a.corpus.scopeState = st
+		a.corpus.mu.Unlock()
 	}
 }
 
+// loadCorpus loads or reloads the index from data_dir in a thread-safe manner.
 func (a *AppModel) loadCorpus() {
-	manifestPath := index.ManifestPath(a.dataDir)
-	m, err := index.LoadManifest(manifestPath)
+	dataDir, err := config.ExpandPath(a.cfg.General.DataDir)
 	if err != nil {
-		a.manifest = nil
-		a.chunks = nil
+		st := a.getScopeState()
+		st.IndexError = "cannot resolve data_dir: " + err.Error()
+		a.setScopeState(st)
 		return
 	}
-	a.manifest = m
 
-	db, err := store.NewPersistentDB(index.StorePath(a.dataDir))
+	manifest, err := index.LoadManifest(dataDir)
 	if err != nil {
-		a.store = nil
-		a.chunks = nil
+		st := a.getScopeState()
+		st.IndexError = "no index found in " + format.DisplayPath(dataDir)
+		a.setScopeState(st)
 		return
 	}
-	a.store = db
 
-	files := make([]string, 0, len(m.Files))
-	for path := range m.Files {
+	if manifest.EmbeddingModel == "" || manifest.Dim == 0 {
+		st := a.getScopeState()
+		st.IndexError = "incomplete manifest header (run ':reindex' to rebuild)"
+		a.setScopeState(st)
+		return
+	}
+	if err := manifest.CheckValidity(a.cfg.Ollama.EmbeddingModel, manifest.Dim, manifest.PrefixScheme, manifest.ChunkerVersion); err != nil {
+		st := a.getScopeState()
+		st.IndexError = fmt.Sprintf("index schema mismatch (indexed with %q, config says %q)", manifest.EmbeddingModel, a.cfg.Ollama.EmbeddingModel)
+		a.setScopeState(st)
+		return
+	}
+
+	st, err := store.NewPersistentDB(index.StorePath(dataDir))
+	if err != nil {
+		sc := a.getScopeState()
+		sc.IndexError = "opening store: " + err.Error()
+		a.setScopeState(sc)
+		return
+	}
+
+	files := make([]string, 0, len(manifest.Files))
+	for path := range manifest.Files {
 		files = append(files, path)
 	}
 	sort.Strings(files)
 
 	ctx := context.Background()
-	a.chunks = make([]store.Chunk, 0)
+	var allChunks []store.Chunk
 	for _, path := range files {
-		for _, id := range m.Files[path].Chunks {
-			chunk, err := db.GetByID(ctx, id)
+		for _, id := range manifest.Files[path].Chunks {
+			chunk, err := st.GetByID(ctx, id)
 			if err != nil {
 				continue
 			}
 			if chunk.Path == "" {
 				chunk.Path = path
 			}
-			a.chunks = append(a.chunks, chunk)
+			allChunks = append(allChunks, chunk)
 		}
 	}
 
-	a.pathIndex = resolve.NewPathIndex(a.chunks)
-	a.bm25Index = resolve.NewBM25Index(a.chunks)
+	pathIdx := resolve.NewPathIndex(allChunks)
+	bm25Idx := resolve.NewBM25Index(allChunks)
 
-	a.ollamaClient = ollama.NewClient(ollama.Options{
+	cli := ollama.NewClient(ollama.Options{
 		Host:              a.cfg.Ollama.Host,
 		EmbedTimeout:      time.Duration(a.cfg.Ollama.Timeouts.EmbedBatchSeconds) * time.Second,
 		IntentTimeout:     time.Duration(a.cfg.Ollama.Timeouts.IntentSeconds) * time.Second,
 		StreamIdleTimeout: time.Duration(a.cfg.Ollama.Timeouts.StreamIdleSeconds) * time.Second,
 	})
-	a.embedCache = ollama.NewEmbeddingCache(queryCacheSize)
-	a.vectorArm = resolve.NewVectorArm(
-		db,
-		a.ollamaClient,
-		a.embedCache,
-		m,
+	cache := ollama.NewEmbeddingCache(queryCacheSize)
+
+	vectorArm := resolve.NewVectorArm(
+		st,
+		cli,
+		cache,
+		manifest,
 		a.cfg.Ollama.EmbeddingModel,
 		a.cfg.Ollama.KeepAlive,
 		a.cfg.Search.OversampleFloor,
 	)
+
+	newCorpus := &corpusState{
+		manifest:     manifest,
+		store:        st,
+		chunks:       allChunks,
+		pathIndex:    pathIdx,
+		bm25Index:    bm25Idx,
+		vectorArm:    vectorArm,
+		ollamaClient: cli,
+		embedCache:   cache,
+	}
+
+	a.setCorpus(newCorpus)
+	sc := a.getScopeState()
+	sc.IndexError = ""
+	a.setScopeState(sc)
 }
 
-// Init initializes the Bubble Tea loop.
+func (a *AppModel) updateScope(override string, global bool) {
+	c := a.getCorpus()
+	totalChunks := 0
+	if c != nil {
+		totalChunks = len(c.chunks)
+	}
+
+	countFn := func(scope string) int {
+		if c == nil {
+			return 0
+		}
+		if scope == "" {
+			return len(c.chunks)
+		}
+		count := 0
+		for _, ch := range c.chunks {
+			if isUnderScope(ch.Path, scope) {
+				count++
+			}
+		}
+		return count
+	}
+
+	st := ResolveScopeState(a.cfg, a.cwd, override, global, totalChunks, countFn)
+	a.setScopeState(st)
+}
+
+func isUnderScope(path, scope string) bool {
+	if scope == "" {
+		return true
+	}
+	cleanScope := filepath.Clean(scope)
+	cleanPath := filepath.Clean(path)
+	if cleanPath == cleanScope {
+		return true
+	}
+	return strings.HasPrefix(cleanPath, cleanScope+string(filepath.Separator))
+}
+
+// Init initializes Bubble Tea sub-components.
 func (a *AppModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
-// Update processes Bubble Tea messages and keypresses.
+type searchCompleteMsg struct {
+	Query     string
+	Intent    *router.Intent
+	Results   []SearchResult
+	Notice    string
+	Weak      []SearchResult
+	Warnings  []string
+	ErrorMsg  string
+	Timestamp time.Time
+}
+
+type explainChunkMsg struct {
+	EntryIndex int
+	Chunk      string
+}
+
+type explainErrMsg struct {
+	EntryIndex int
+	Err        error
+}
+
+type clearFlashMsg struct{}
+
+func flashClearCmd() tea.Cmd {
+	return tea.Tick(4*time.Second, func(t time.Time) tea.Msg {
+		return clearFlashMsg{}
+	})
+}
+
+// Update handles message dispatch for the Elm loop.
 func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -279,39 +361,28 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.height = msg.Height
 		headerHeight := 2
 		inputHeight := 3
-		vpHeight := msg.Height - headerHeight - inputHeight
-		if vpHeight < 4 {
-			vpHeight = 4
-		}
-
-		if !a.ready {
-			a.viewport = viewport.New(msg.Width, vpHeight)
-			a.viewport.SetContent(RenderChat(a.history, msg.Width, a.theme))
-			a.ready = true
-		} else {
-			a.viewport.Width = msg.Width
-			a.viewport.Height = vpHeight
-			a.viewport.SetContent(RenderChat(a.history, msg.Width, a.theme))
+		statusBarHeight := 1
+		a.viewport.Width = msg.Width
+		a.viewport.Height = msg.Height - headerHeight - inputHeight - statusBarHeight
+		if a.viewport.Height < 4 {
+			a.viewport.Height = 4
 		}
 		a.input.Width = msg.Width - 6
 		return a, nil
 
 	case IndexProgressMsg:
-		var cmd tea.Cmd
-		a.indexer, cmd = a.indexer.Update(msg)
+		cmd := a.indexer.Update(msg)
 		return a, cmd
 
 	case IndexTickMsg:
-		var cmd tea.Cmd
-		a.indexer, cmd = a.indexer.Update(msg)
+		cmd := a.indexer.Update(msg)
 		return a, cmd
 
 	case IndexDoneMsg:
-		var cmd tea.Cmd
-		a.indexer, cmd = a.indexer.Update(msg)
+		cmd := a.indexer.Update(msg)
 		if msg.Err == nil {
 			a.loadCorpus()
-			a.updateScope(a.scopePinned, a.scopeState.Global)
+			a.updateScope(a.scopePinned, a.getScopeState().Global)
 			a.sessionRefs.Clear()
 		}
 		return a, cmd
@@ -332,9 +403,9 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		a.history = append(a.history, entry)
 
-		// Record results into session refs
+		// Record in session refs
 		if len(msg.Results) > 0 {
-			items := make([]session.Item, 0, len(msg.Results))
+			var items []session.Item
 			for _, r := range msg.Results {
 				items = append(items, session.Item{
 					Rank:     r.Rank,
@@ -356,15 +427,8 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case explainChunkMsg:
 		if msg.EntryIndex >= 0 && msg.EntryIndex < len(a.history) {
-			a.history[msg.EntryIndex].ExplainContent += msg.Chunk
 			a.history[msg.EntryIndex].ExplainLoading = false
-			a.refreshViewport()
-		}
-		return a, nil
-
-	case explainDoneMsg:
-		if msg.EntryIndex >= 0 && msg.EntryIndex < len(a.history) {
-			a.history[msg.EntryIndex].ExplainLoading = false
+			a.history[msg.EntryIndex].ExplainContent = msg.Chunk
 			a.refreshViewport()
 		}
 		return a, nil
@@ -372,148 +436,132 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case explainErrMsg:
 		if msg.EntryIndex >= 0 && msg.EntryIndex < len(a.history) {
 			a.history[msg.EntryIndex].ExplainLoading = false
-			a.history[msg.EntryIndex].ErrorMsg = fmt.Sprintf("explain failed: %v", msg.Err)
+			a.history[msg.EntryIndex].ErrorMsg = fmt.Sprintf("explain error: %v", msg.Err)
 			a.refreshViewport()
 		}
 		return a, nil
 
-	case statusFlashMsg:
-		entry := ChatEntry{
-			IsUser:    false,
-			Timestamp: time.Now(),
+	case clearFlashMsg:
+		if time.Since(a.statusTimer) >= 3800*time.Millisecond {
+			a.statusFlash = ""
+			a.statusIsErr = false
 		}
-		if msg.IsError {
-			entry.ErrorMsg = msg.Message
-		} else {
-			entry.SuccessMsg = msg.Message
-		}
-		a.history = append(a.history, entry)
-		a.refreshViewport()
 		return a, nil
 
 	case tea.KeyMsg:
-		// Global quit
+		// Global Quit
 		if msg.Type == tea.KeyCtrlC {
 			return a, tea.Quit
 		}
 
 		// Handle Picker mode
 		if a.mode == ModePicker {
-			var pickedItem *PickerItem
-			var ok bool
-			var cmd tea.Cmd
-			a.picker, cmd, pickedItem, ok = a.picker.Update(msg)
-			if ok && pickedItem != nil {
-				a.mode = ModeNormal
-				a.activatePickerItem(*pickedItem)
-			} else if !a.picker.Active {
+			targetIdx := a.picker.TargetHistoryIndex
+			var item *PickerItem
+			var picked bool
+			a.picker, _, item, picked = a.picker.Update(msg)
+			if !a.picker.Active {
 				a.mode = ModeNormal
 			}
-			return a, cmd
+			if picked && item != nil {
+				a.activatePickerItem(targetIdx, *item)
+			}
+			return a, nil
 		}
 
-		// Handle Indexing mode
+		// Handle Indexing mode: Esc or Enter cancels and immediately returns to normal mode
 		if a.mode == ModeIndexing {
 			if msg.String() == "esc" || msg.String() == "enter" {
-				if !a.indexer.Running {
-					a.mode = ModeNormal
-					if a.indexer.Result != nil {
-						a.history = append(a.history, ChatEntry{
-							IsUser:     false,
-							SuccessMsg: fmt.Sprintf("✓ Indexing finished: %d files, %d chunks", len(a.indexer.Result.Files), a.indexer.Result.Chunks),
-							Timestamp:  time.Now(),
-						})
-					}
-					a.refreshViewport()
-					return a, nil
+				if a.indexer.Running && a.indexer.CancelFn != nil {
+					a.indexer.CancelFn()
+					a.indexer.CancelFn = nil
+					a.indexer.Running = false
 				}
+				a.mode = ModeNormal
+				a.refreshViewport()
+				return a, nil
 			}
-			var cmd tea.Cmd
-			a.indexer, cmd = a.indexer.Update(msg)
+			cmd := a.indexer.Update(msg)
 			return a, cmd
 		}
 
-		// ModeNormal: Single-key hotkeys when input is empty OR ctrl hotkeys anytime
-		isEmpty := len(a.input.Value()) == 0
-
-		switch {
-		case (isEmpty && msg.String() == "o") || msg.Type == tea.KeyCtrlO:
-			return a, a.triggerOpenLatest()
-
-		case (isEmpty && msg.String() == "c") || msg.Type == tea.KeyCtrlY:
-			return a, a.triggerCopyLatest(false)
-
-		case (isEmpty && msg.String() == "e") || msg.Type == tea.KeyCtrlE:
-			return a, a.triggerExplainLatest()
-
-		case (isEmpty && msg.String() == "n") || msg.Type == tea.KeyCtrlN:
-			return a, a.triggerCycleMatch(1)
-
-		case (isEmpty && msg.String() == "p") || msg.Type == tea.KeyCtrlP:
-			return a, a.triggerCycleMatch(-1)
-
-		case (isEmpty && msg.String() == "g") || msg.Type == tea.KeyCtrlG:
-			return a, a.triggerToggleGlobal()
-
-		case msg.Type == tea.KeyTab:
-			return a, a.triggerOpenPicker()
-
-		case msg.Type == tea.KeyCtrlL:
-			a.history = nil
-			a.refreshViewport()
-			return a, nil
-
-		case msg.Type == tea.KeyEnter:
-			query := strings.TrimSpace(a.input.Value())
-			if query != "" {
-				a.input.SetValue("")
-				return a, a.handleSubmit(query)
+		// Single-key hotkeys when text input is empty
+		if a.input.Value() == "" {
+			switch msg.String() {
+			case "o":
+				return a, a.triggerOpenLatest()
+			case "c":
+				return a, a.triggerCopyLatest(false)
+			case "e":
+				return a, a.triggerExplainLatest()
+			case "n":
+				return a, a.triggerCycleMatch(1)
+			case "p":
+				return a, a.triggerCycleMatch(-1)
+			case "g":
+				return a, a.triggerToggleGlobal()
+			case "tab":
+				return a, a.triggerOpenPicker()
+			case "esc":
+				return a, tea.Quit
 			}
-			return a, nil
+		}
 
-		case msg.Type == tea.KeyUp || msg.Type == tea.KeyDown || msg.Type == tea.KeyPgUp || msg.Type == tea.KeyPgDown:
+		// Submit input with Enter
+		if msg.Type == tea.KeyEnter {
+			val := strings.TrimSpace(a.input.Value())
+			if val == "" {
+				return a, nil
+			}
+			a.input.SetValue("")
+			cmd := a.handleSubmit(val)
+			return a, cmd
+		}
+
+		// Forward arrow navigation to viewport if relevant
+		switch msg.Type {
+		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
 			var vpCmd tea.Cmd
 			a.viewport, vpCmd = a.viewport.Update(msg)
-			return a, vpCmd
+			cmds = append(cmds, vpCmd)
 		}
 	}
 
-	var tiCmd tea.Cmd
-	a.input, tiCmd = a.input.Update(msg)
-	cmds = append(cmds, tiCmd)
+	var inputCmd tea.Cmd
+	a.input, inputCmd = a.input.Update(msg)
+	cmds = append(cmds, inputCmd)
 
 	return a, tea.Batch(cmds...)
 }
 
 func (a *AppModel) refreshViewport() {
-	if a.ready {
-		a.viewport.SetContent(RenderChat(a.history, a.width, a.theme))
-		a.viewport.GotoBottom()
-	}
+	rendered := RenderChat(a.history, a.viewport.Width, a.theme)
+	a.viewport.SetContent(rendered)
+	a.viewport.GotoBottom()
 }
 
-// handleSubmit executes a user query or in-TUI command.
+// handleSubmit routes colon commands, NL session refs, or new search queries.
 func (a *AppModel) handleSubmit(input string) tea.Cmd {
-	// Add user entry to history
+	// Add user query to history
 	a.history = append(a.history, ChatEntry{
 		IsUser:    true,
 		Query:     input,
 		Timestamp: time.Now(),
 	})
-	a.refreshViewport()
 
-	// 1. Colon commands
+	// 1. Colon Command Dispatch
 	if strings.HasPrefix(input, ":") {
 		return a.handleColonCommand(input)
 	}
 
-	// 2. Ordinal & pronoun session references ("open it", "copy that", "#2", "explain", "next")
+	// 2. Session Reference Action (e.g. "open that", "copy it", "#2")
 	if cmd := a.handleSessionReferenceAction(input); cmd != nil {
 		return cmd
 	}
 
-	// 3. Search / Router Intent
-	return a.executeSearch(input)
+	// 3. New Intent/Search Execution
+	a.refreshViewport()
+	return a.executeIntent(input)
 }
 
 func (a *AppModel) handleColonCommand(input string) tea.Cmd {
@@ -524,31 +572,45 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 	case ":q", ":quit", ":exit":
 		return tea.Quit
 
-	case ":clear":
-		a.history = nil
-		a.refreshViewport()
-		return nil
-
-	case ":help":
+	case ":help", ":?":
 		helpText := strings.Join([]string{
-			"🔷 Vektix Commands & Keybinds:",
-			"  [o]pen        Open current match in editor",
-			"  [c]opy        Copy current excerpt to clipboard",
-			"  [e]xplain     Explain current passage with qwen2.5:3b (loaded on demand)",
-			"  [n]ext        Cycle to next candidate match",
-			"  [Tab]         Open candidate chooser picker",
-			"  [g]lobal      Toggle between subtree scope and global search",
-			"  :scope <dir>  Confine searches to <dir>",
-			"  :scope global Search the whole index",
-			"  :sync         Sync index and purge orphan chunks",
-			"  :reindex      Rebuild index from scratch",
-			"  :index <dir>  Index a new directory",
-			"  :clear        Clear conversation history",
-			"  :quit         Exit Vektix",
+			"🔷 Vektix Commands & Keybinds",
+			"  [o]pen      Open current result in editor",
+			"  [c]opy      Copy current excerpt to clipboard",
+			"  [e]xplain   Explain current excerpt with Ollama",
+			"  [n]ext      Cycle to next matching result",
+			"  [g]lobal    Toggle global search on / off",
+			"  [tab]       Open ambiguous candidate picker",
+			"",
+			"Commands:",
+			"  :scope <path>    Switch active search scope",
+			"  :global          Search across all indexed roots",
+			"  :index [dir]     Index or reindex directories",
+			"  :sync            Sync and purge orphan chunks",
+			"  :status          Show active scope and chunk counts",
+			"  :clear           Clear query and chat history",
+			"  :help            Show this help dialog",
+			"  :quit            Exit Vektix",
 		}, "\n")
+
 		a.history = append(a.history, ChatEntry{
 			IsUser:    false,
 			Notice:    helpText,
+			Timestamp: time.Now(),
+		})
+		a.refreshViewport()
+		return nil
+
+	case ":clear":
+		a.history = nil
+		a.sessionRefs.Clear()
+		a.refreshViewport()
+		return nil
+
+	case ":status":
+		a.history = append(a.history, ChatEntry{
+			IsUser:    false,
+			Notice:    a.getScopeState().Banner(),
 			Timestamp: time.Now(),
 		})
 		a.refreshViewport()
@@ -558,7 +620,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		if len(parts) < 2 {
 			a.history = append(a.history, ChatEntry{
 				IsUser:    false,
-				Notice:    fmt.Sprintf("Current active scope: %s", a.scopeState.Describe()),
+				Notice:    fmt.Sprintf("Current active scope: %s", a.getScopeState().Describe()),
 				Timestamp: time.Now(),
 			})
 			a.refreshViewport()
@@ -570,7 +632,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			a.sessionRefs.Clear()
 			a.history = append(a.history, ChatEntry{
 				IsUser:     false,
-				SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.scopeState.Total)),
+				SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
 				Timestamp:  time.Now(),
 			})
 		} else {
@@ -582,7 +644,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			a.sessionRefs.Clear()
 			a.history = append(a.history, ChatEntry{
 				IsUser:     false,
-				SuccessMsg: fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", a.scopeState.Describe()),
+				SuccessMsg: fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", a.getScopeState().Describe()),
 				Timestamp:  time.Now(),
 			})
 		}
@@ -594,42 +656,39 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		a.sessionRefs.Clear()
 		a.history = append(a.history, ChatEntry{
 			IsUser:     false,
-			SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.scopeState.Total)),
+			SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
 			Timestamp:  time.Now(),
 		})
 		a.refreshViewport()
 		return nil
 
-	case ":sync":
+	case ":index":
+		roots := a.cfg.Index.IndexDirs
+		if len(parts) > 1 {
+			target := strings.Join(parts[1:], " ")
+			exp, err := config.ExpandPath(target)
+			if err != nil {
+				exp = target
+			}
+			roots = []string{exp}
+		}
 		a.mode = ModeIndexing
-		return a.indexer.Start(a.cfg, nil, index.ModeSync)
+		return a.indexer.Start(a.cfg, roots, index.ModeIndex)
+
+	case ":sync":
+		roots := a.cfg.Index.IndexDirs
+		a.mode = ModeIndexing
+		return a.indexer.Start(a.cfg, roots, index.ModeSync)
 
 	case ":reindex":
+		roots := a.cfg.Index.IndexDirs
 		a.mode = ModeIndexing
-		return a.indexer.Start(a.cfg, nil, index.ModeReindex)
-
-	case ":index":
-		if len(parts) < 2 {
-			a.history = append(a.history, ChatEntry{
-				IsUser:    false,
-				ErrorMsg:  "usage: :index <path>",
-				Timestamp: time.Now(),
-			})
-			a.refreshViewport()
-			return nil
-		}
-		dir := strings.Join(parts[1:], " ")
-		exp, err := config.ExpandPath(dir)
-		if err != nil {
-			exp = dir
-		}
-		a.mode = ModeIndexing
-		return a.indexer.Start(a.cfg, []string{exp}, index.ModeIndex)
+		return a.indexer.Start(a.cfg, roots, index.ModeReindex)
 
 	default:
 		a.history = append(a.history, ChatEntry{
 			IsUser:    false,
-			ErrorMsg:  fmt.Sprintf("unknown command %q (type :help for commands)", cmd),
+			ErrorMsg:  fmt.Sprintf("unknown command: %s (type :help for available commands)", cmd),
 			Timestamp: time.Now(),
 		})
 		a.refreshViewport()
@@ -637,7 +696,6 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 	}
 }
 
-// handleSessionReferenceAction resolves actions like "open it", "copy that", "#2", "explain"
 func (a *AppModel) handleSessionReferenceAction(input string) tea.Cmd {
 	lower := strings.ToLower(strings.TrimSpace(input))
 
@@ -684,7 +742,7 @@ func (a *AppModel) handleSessionReferenceAction(input string) tea.Cmd {
 		}
 	}
 
-	// Pattern: standalone explicit ordinal/pronoun reference like "#2", "the second one", "that pdf"
+	// Pattern: standalone explicit ordinal/pronoun reference like "#2", "2", "the second one", "that pdf"
 	if session.IsExplicitRef(lower) {
 		if item, idx, ok := a.sessionRefs.ResolveRef(lower); ok {
 			a.setActiveResultIndex(idx)
@@ -706,6 +764,7 @@ func (a *AppModel) setActiveResultIndex(idx int) {
 		if len(a.history[i].Results) > 0 {
 			if idx >= 0 && idx < len(a.history[i].Results) {
 				a.history[i].ActiveIndex = idx
+				a.sessionRefs.SetActiveIndex(idx)
 				a.refreshViewport()
 			}
 			break
@@ -713,10 +772,11 @@ func (a *AppModel) setActiveResultIndex(idx int) {
 	}
 }
 
-// executeSearch runs the 2-Tier router and executes retrieval.
-func (a *AppModel) executeSearch(query string) tea.Cmd {
+// executeIntent runs the 2-Tier router and dispatches on intent.Action.
+func (a *AppModel) executeIntent(query string) tea.Cmd {
 	return func() tea.Msg {
-		if a.manifest == nil || len(a.chunks) == 0 {
+		c := a.getCorpus()
+		if c == nil || c.manifest == nil || len(c.chunks) == 0 {
 			return searchCompleteMsg{
 				Query:     query,
 				ErrorMsg:  "no index found. Use ':index <path>' to index your files first.",
@@ -731,8 +791,8 @@ func (a *AppModel) executeSearch(query string) tea.Cmd {
 		intent := router.ParseFastPath(query)
 
 		// Router Tier 2: LLM intent classification on fast-path miss
-		if intent == nil && a.ollamaClient != nil {
-			llmIntent, err := router.ParseLLM(ctx, a.ollamaClient, a.cfg.Ollama.IntentModel, query)
+		if intent == nil && c.ollamaClient != nil {
+			llmIntent, err := router.ParseLLM(ctx, c.ollamaClient, a.cfg.Ollama.IntentModel, query)
 			if err == nil && llmIntent != nil {
 				intent = llmIntent
 			}
@@ -746,88 +806,340 @@ func (a *AppModel) executeSearch(query string) tea.Cmd {
 			}
 		}
 
-		// Execute based on intent action
-		scope := a.scopeState.Path
+		scopeState := a.getScopeState()
+		scope := scopeState.Path
 		k := a.cfg.Search.MaxResults
 		if k <= 0 {
 			k = 8
 		}
 
-		searchQuery := intent.Query
-		if searchQuery == "" {
-			searchQuery = intent.Path
-		}
-		if searchQuery == "" {
-			searchQuery = query
-		}
+		switch intent.Action {
+		case "open":
+			targetPath := intent.Path
+			if targetPath == "" {
+				targetPath = intent.Query
+			}
+			if targetPath == "" {
+				if it, ok := a.sessionRefs.Get(a.sessionRefs.ActiveIndex()); ok {
+					targetPath = it.Path
+				}
+			}
 
-		useVector := intent.Action == "excerpt"
-		strong, weak, warnings := a.searchCorpus(ctx, searchQuery, scope, k, useVector)
+			resolvedPath := a.resolveLocalOrSearchPath(c, ctx, targetPath, scope)
+			if resolvedPath != "" {
+				err := a.openFn(resolvedPath, false, a.cfg)
+				if err != nil {
+					return searchCompleteMsg{
+						Query:     query,
+						Intent:    intent,
+						ErrorMsg:  fmt.Sprintf("could not open %s: %v", format.DisplayPath(resolvedPath), err),
+						Timestamp: time.Now(),
+					}
+				}
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					Notice:    fmt.Sprintf("✓ opened %s in editor", format.DisplayPath(resolvedPath)),
+					Timestamp: time.Now(),
+				}
+			}
 
-		if len(strong) == 0 {
-			emptyMsg := a.formatEmptyMessage(searchQuery, len(weak))
 			return searchCompleteMsg{
 				Query:     query,
 				Intent:    intent,
-				Notice:    emptyMsg,
+				ErrorMsg:  fmt.Sprintf("could not find file to open matching %q", targetPath),
+				Timestamp: time.Now(),
+			}
+
+		case "copy":
+			target := intent.Path
+			if target == "" {
+				target = intent.Query
+			}
+			pathOnly := strings.Contains(strings.ToLower(query), "path")
+
+			targetPath := target
+			content := ""
+			if target == "" {
+				if it, ok := a.sessionRefs.Get(a.sessionRefs.ActiveIndex()); ok {
+					targetPath = it.Path
+					content = it.Content
+				}
+			} else {
+				resolvedPath := a.resolveLocalOrSearchPath(c, ctx, target, scope)
+				if resolvedPath != "" {
+					targetPath = resolvedPath
+					data, readErr := fileops.ReadFile(resolvedPath, false, a.cfg)
+					if readErr == nil {
+						content = string(data)
+					}
+				}
+			}
+
+			if targetPath == "" {
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					ErrorMsg:  "no search results or file to copy",
+					Timestamp: time.Now(),
+				}
+			}
+
+			payload := format.DisplayPath(targetPath)
+			modeDesc := "path"
+			if !pathOnly && content != "" {
+				payload = content
+				modeDesc = "excerpt"
+			}
+
+			mechanism, err := a.copyFn(os.Stderr, payload)
+			if err != nil {
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					ErrorMsg:  fmt.Sprintf("clipboard copy failed: %v", err),
+					Timestamp: time.Now(),
+				}
+			}
+
+			return searchCompleteMsg{
+				Query:     query,
+				Intent:    intent,
+				Notice:    fmt.Sprintf("✓ copied %s of %s to clipboard (%s)", modeDesc, format.DisplayPath(targetPath), mechanism),
+				Timestamp: time.Now(),
+			}
+
+		case "read":
+			rawTarget := intent.Path
+			if rawTarget == "" {
+				rawTarget = intent.Query
+			}
+			targetPath, startLine, endLine := splitPathRange(rawTarget)
+			if intent.Lines != "" {
+				if s, e, err := parseLineRange(intent.Lines); err == nil {
+					startLine = s
+					endLine = e
+				}
+			}
+
+			resolvedPath := a.resolveLocalOrSearchPath(c, ctx, targetPath, scope)
+			if resolvedPath == "" {
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					ErrorMsg:  fmt.Sprintf("could not find file %q to read", targetPath),
+					Timestamp: time.Now(),
+				}
+			}
+
+			data, err := fileops.ReadFile(resolvedPath, false, a.cfg)
+			if err != nil {
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					ErrorMsg:  fmt.Sprintf("could not read %s: %v", format.DisplayPath(resolvedPath), err),
+					Timestamp: time.Now(),
+				}
+			}
+
+			content := string(data)
+			lines := strings.Split(content, "\n")
+			start := 1
+			end := len(lines)
+			if startLine > 0 {
+				start = startLine
+			}
+			if endLine > 0 {
+				end = endLine
+			}
+			if start > len(lines) {
+				start = len(lines)
+			}
+			if end > len(lines) {
+				end = len(lines)
+			}
+			if start < 1 {
+				start = 1
+			}
+
+			var body strings.Builder
+			for i := start - 1; i < end; i++ {
+				body.WriteString(fmt.Sprintf("%4d │ %s\n", i+1, lines[i]))
+			}
+
+			header := fmt.Sprintf("%s:%d-%d (%d lines)\n", format.DisplayPath(resolvedPath), start, end, end-start+1)
+			return searchCompleteMsg{
+				Query:     query,
+				Intent:    intent,
+				Notice:    header + "\n" + body.String(),
+				Timestamp: time.Now(),
+			}
+
+		case "list":
+			dir := intent.Path
+			if dir == "" {
+				dir = scope
+			}
+			if dir == "" {
+				dir = a.cwd
+			}
+
+			if !filepath.IsAbs(dir) && a.cwd != "" {
+				cwdPath := filepath.Join(a.cwd, dir)
+				if _, err := os.Stat(cwdPath); err == nil {
+					dir = cwdPath
+				}
+			}
+
+			safeDir, err := fileops.ResolvePath(dir, false, a.cfg)
+			if err != nil {
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					ErrorMsg:  fmt.Sprintf("could not list %s: %v", format.DisplayPath(dir), err),
+					Timestamp: time.Now(),
+				}
+			}
+
+			entries, err := os.ReadDir(safeDir)
+			if err != nil {
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					ErrorMsg:  fmt.Sprintf("reading directory %s: %v", format.DisplayPath(safeDir), err),
+					Timestamp: time.Now(),
+				}
+			}
+
+			var out strings.Builder
+			out.WriteString(fmt.Sprintf("📁 Listing for %s:\n", format.DisplayPath(safeDir)))
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), ".") {
+					continue
+				}
+				if e.IsDir() {
+					out.WriteString(fmt.Sprintf("  📂 %s/\n", e.Name()))
+				} else {
+					info, _ := e.Info()
+					sz := ""
+					if info != nil {
+						sz = fmt.Sprintf(" (%s)", format.HumanBytes(info.Size()))
+					}
+					out.WriteString(fmt.Sprintf("  📄 %s%s\n", e.Name(), sz))
+				}
+			}
+
+			return searchCompleteMsg{
+				Query:     query,
+				Intent:    intent,
+				Notice:    out.String(),
+				Timestamp: time.Now(),
+			}
+
+		case "locate":
+			searchQuery := intent.Query
+			if searchQuery == "" {
+				searchQuery = intent.Path
+			}
+			if searchQuery == "" {
+				searchQuery = query
+			}
+
+			strong, weak, warnings := a.searchCorpusWith(c, ctx, searchQuery, scope, k, false)
+			if len(strong) == 0 {
+				emptyMsg := a.formatEmptyMessage(searchQuery, len(weak), scopeState)
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					Notice:    emptyMsg,
+					Weak:      weak,
+					Warnings:  warnings,
+					Timestamp: time.Now(),
+				}
+			}
+
+			// Deduplicate locate results by path
+			seenPaths := map[string]bool{}
+			var deduped []SearchResult
+			for _, r := range strong {
+				if !seenPaths[r.Chunk.Path] {
+					seenPaths[r.Chunk.Path] = true
+					r.Text = format.DisplayPath(r.Chunk.Path)
+					deduped = append(deduped, r)
+				}
+			}
+
+			return searchCompleteMsg{
+				Query:     query,
+				Intent:    intent,
+				Results:   deduped,
+				Weak:      weak,
+				Warnings:  warnings,
+				Timestamp: time.Now(),
+			}
+
+		default: // "excerpt" and general search
+			searchQuery := intent.Query
+			if searchQuery == "" {
+				searchQuery = intent.Path
+			}
+			if searchQuery == "" {
+				searchQuery = query
+			}
+
+			strong, weak, warnings := a.searchCorpusWith(c, ctx, searchQuery, scope, k, true)
+			if len(strong) == 0 {
+				emptyMsg := a.formatEmptyMessage(searchQuery, len(weak), scopeState)
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					Notice:    emptyMsg,
+					Weak:      weak,
+					Warnings:  warnings,
+					Timestamp: time.Now(),
+				}
+			}
+
+			var results []SearchResult
+			for _, r := range strong {
+				text, loc, err := a.excerptChunk(r.Chunk)
+				if err != nil {
+					continue
+				}
+				r.Text = text
+				r.Locator = loc
+				results = append(results, r)
+			}
+
+			if len(results) == 0 {
+				return searchCompleteMsg{
+					Query:     query,
+					Intent:    intent,
+					ErrorMsg:  fmt.Sprintf("matches were found in %s but could not be read from disk", scopeState.Describe()),
+					Timestamp: time.Now(),
+				}
+			}
+
+			return searchCompleteMsg{
+				Query:     query,
+				Intent:    intent,
+				Results:   results,
 				Weak:      weak,
 				Warnings:  warnings,
 				Timestamp: time.Now(),
 			}
 		}
-
-		// Build formatted SearchResults
-		var results []SearchResult
-		for _, r := range strong {
-			text, loc, err := a.excerptChunk(r.Chunk)
-			if err != nil {
-				continue
-			}
-			r.Text = text
-			r.Locator = loc
-			results = append(results, r)
-		}
-
-		if len(results) == 0 {
-			return searchCompleteMsg{
-				Query:     query,
-				Intent:    intent,
-				ErrorMsg:  fmt.Sprintf("matches were found in %s but could not be read from disk", a.scopeState.Describe()),
-				Timestamp: time.Now(),
-			}
-		}
-
-		return searchCompleteMsg{
-			Query:     query,
-			Intent:    intent,
-			Results:   results,
-			Weak:      weak,
-			Warnings:  warnings,
-			Timestamp: time.Now(),
-		}
 	}
 }
 
-type searchCandidate struct {
-	chunk    store.Chunk
-	score    float64
-	arms     []string
-	bestRank int
-	rank     int
-}
-
-func (s searchCandidate) armLabel() string {
-	return fmt.Sprintf("(%s, rank %d)", strings.Join(s.arms, "+"), s.rank)
-}
-
-func (a *AppModel) searchCorpus(ctx context.Context, query, scope string, k int, useVector bool) (strong, weak []SearchResult, warnings []string) {
-	if query == "" || a.pathIndex == nil || a.bm25Index == nil {
+func (a *AppModel) searchCorpusWith(c *corpusState, ctx context.Context, query, scope string, k int, useVector bool) (strong, weak []SearchResult, warnings []string) {
+	if query == "" || c == nil || c.pathIndex == nil || c.bm25Index == nil {
 		return nil, nil, nil
 	}
 
 	lists := []resolve.ResultList{
-		a.pathIndex.Search(query, scope),
-		a.bm25Index.Search(query, scope),
+		c.pathIndex.Search(query, scope),
+		c.bm25Index.Search(query, scope),
 	}
 	labels := []string{"path", "bm25"}
 
@@ -840,12 +1152,12 @@ func (a *AppModel) searchCorpus(ctx context.Context, query, scope string, k int,
 		return strong, weak, nil
 	}
 
-	if a.vectorArm != nil {
+	if c.vectorArm != nil {
 		vecK := k * 4
 		if vecK < 20 {
 			vecK = 20
 		}
-		vres, err := a.vectorArm.Search(ctx, query, scope, vecK)
+		vres, err := c.vectorArm.Search(ctx, query, scope, vecK)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("semantic search warning: %v", err))
 		} else {
@@ -934,17 +1246,89 @@ func (a *AppModel) excerptChunk(chunk store.Chunk) (string, store.Locator, error
 	return text, loc, nil
 }
 
-func (a *AppModel) formatEmptyMessage(query string, weakHits int) string {
-	if a.scopeState.Global {
+func (a *AppModel) resolveLocalOrSearchPath(c *corpusState, ctx context.Context, target, scope string) string {
+	if target == "" {
+		return ""
+	}
+	// 1. If relative, check under cwd
+	if !filepath.IsAbs(target) && a.cwd != "" {
+		cwdPath := filepath.Join(a.cwd, target)
+		if _, err := os.Stat(cwdPath); err == nil {
+			if safe, err := fileops.ResolvePath(cwdPath, false, a.cfg); err == nil {
+				return safe
+			}
+		}
+	}
+	// 2. Direct ResolvePath
+	if safe, err := fileops.ResolvePath(target, false, a.cfg); err == nil {
+		if _, err := os.Stat(safe); err == nil {
+			return safe
+		}
+	}
+	// 3. Fallback to corpus search
+	strong, _, _ := a.searchCorpusWith(c, ctx, target, scope, 1, false)
+	if len(strong) > 0 {
+		return strong[0].Chunk.Path
+	}
+	return ""
+}
+
+func splitPathRange(arg string) (path string, start, end int) {
+	idx := strings.LastIndex(arg, ":")
+	if idx <= 0 {
+		return arg, 0, 0
+	}
+	s, e, err := parseLineRange(arg[idx+1:])
+	if err != nil {
+		return arg, 0, 0
+	}
+	return arg[:idx], s, e
+}
+
+func parseLineRange(spec string) (int, int, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return 0, 0, fmt.Errorf("empty line range")
+	}
+	if !strings.Contains(spec, "-") {
+		n, err := strconv.Atoi(spec)
+		if err != nil || n < 1 {
+			return 0, 0, fmt.Errorf("invalid line range %q", spec)
+		}
+		return n, n, nil
+	}
+	parts := strings.SplitN(spec, "-", 2)
+	var start, end int
+	var err error
+	if parts[0] != "" {
+		if start, err = strconv.Atoi(parts[0]); err != nil || start < 1 {
+			return 0, 0, fmt.Errorf("invalid line range %q", spec)
+		}
+	} else {
+		start = 1
+	}
+	if parts[1] != "" {
+		if end, err = strconv.Atoi(parts[1]); err != nil || end < 1 {
+			return 0, 0, fmt.Errorf("invalid line range %q", spec)
+		}
+	}
+	if end != 0 && end < start {
+		return 0, 0, fmt.Errorf("invalid line range %q: end before start", spec)
+	}
+	return start, end, nil
+}
+
+func (a *AppModel) formatEmptyMessage(query string, weakHits int, st ScopeState) string {
+	if st.Global {
 		return fmt.Sprintf("no matches for %q in scope %s — run ':sync' or ':index <dir>' if files were added",
-			query, a.scopeState.Describe())
+			query, st.Describe())
 	}
 	if weakHits > 0 {
 		return fmt.Sprintf("no matches for %q in scope %s (%d weak matches outside this scope — press [g] to search globally)",
-			query, a.scopeState.Describe(), weakHits)
+			query, st.Describe(), weakHits)
 	}
 	return fmt.Sprintf("no matches for %q in scope %s (press [g] to search all %s chunks globally)",
-		query, a.scopeState.Describe(), format.HumanInt(a.scopeState.Total))
+		query, st.Describe(), format.HumanInt(st.Total))
 }
 
 // Keybind Action Triggers
@@ -990,7 +1374,19 @@ func (a *AppModel) triggerExplainLatest() tea.Cmd {
 
 func (a *AppModel) streamExplain(entryIdx int, item session.Item, modelName string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		c := a.getCorpus()
+		if c == nil || c.ollamaClient == nil {
+			return explainErrMsg{
+				EntryIndex: entryIdx,
+				Err:        fmt.Errorf("ollama client not available"),
+			}
+		}
+
+		timeout := time.Duration(a.cfg.Ollama.Timeouts.StreamIdleSeconds) * time.Second
+		if timeout <= 0 {
+			timeout = 60 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
 		promptText := fmt.Sprintf("File: %s\n```\n%s\n```\nExplain what this code or document section does and why it is significant.",
@@ -1015,7 +1411,7 @@ func (a *AppModel) streamExplain(entryIdx int, item session.Item, modelName stri
 			},
 		}
 
-		resp, err := a.ollamaClient.Chat(ctx, req)
+		resp, err := c.ollamaClient.Chat(ctx, req)
 		if err != nil {
 			return explainErrMsg{
 				EntryIndex: entryIdx,
@@ -1039,6 +1435,7 @@ func (a *AppModel) triggerCycleMatch(delta int) tea.Cmd {
 				next += total
 			}
 			a.history[i].ActiveIndex = next
+			a.sessionRefs.SetActiveIndex(next)
 			a.refreshViewport()
 			return nil
 		}
@@ -1047,13 +1444,15 @@ func (a *AppModel) triggerCycleMatch(delta int) tea.Cmd {
 }
 
 func (a *AppModel) triggerToggleGlobal() tea.Cmd {
-	newGlobal := !a.scopeState.Global
+	st := a.getScopeState()
+	newGlobal := !st.Global
 	a.updateScope(a.scopePinned, newGlobal)
 	a.sessionRefs.Clear()
 
-	msg := fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.scopeState.Total))
+	st = a.getScopeState()
+	msg := fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(st.Total))
 	if !newGlobal {
-		msg = fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", a.scopeState.Describe())
+		msg = fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", st.Describe())
 	}
 	return a.flashStatus(msg, false)
 }
@@ -1074,7 +1473,7 @@ func (a *AppModel) triggerOpenPicker() tea.Cmd {
 					Chunk:    &r.Chunk,
 				})
 			}
-			a.picker.Open(pickerItems, a.width, a.height)
+			a.picker.Open(i, pickerItems, a.width, a.height)
 			a.mode = ModePicker
 			return nil
 		}
@@ -1082,16 +1481,14 @@ func (a *AppModel) triggerOpenPicker() tea.Cmd {
 	return a.flashStatus("no ambiguous candidates to pick from", true)
 }
 
-func (a *AppModel) activatePickerItem(item PickerItem) {
-	for i := len(a.history) - 1; i >= 0; i-- {
-		if len(a.history[i].Results) > 0 {
-			for idx, r := range a.history[i].Results {
-				if r.Chunk.ID == item.Chunk.ID || r.Chunk.Path == item.Path {
-					a.history[i].ActiveIndex = idx
-					break
-				}
+func (a *AppModel) activatePickerItem(targetHistoryIdx int, item PickerItem) {
+	if targetHistoryIdx >= 0 && targetHistoryIdx < len(a.history) {
+		for idx, r := range a.history[targetHistoryIdx].Results {
+			if r.Chunk.ID == item.Chunk.ID || r.Chunk.Path == item.Path {
+				a.history[targetHistoryIdx].ActiveIndex = idx
+				a.sessionRefs.SetActiveIndex(idx)
+				break
 			}
-			break
 		}
 	}
 	a.refreshViewport()
@@ -1120,7 +1517,7 @@ func (a *AppModel) getActiveItem() (session.Item, bool) {
 	}
 
 	if a.sessionRefs.Count() > 0 {
-		it, ok := a.sessionRefs.Get(0)
+		it, ok := a.sessionRefs.Get(a.sessionRefs.ActiveIndex())
 		if ok && it != nil {
 			return *it, true
 		}
@@ -1160,61 +1557,59 @@ func (a *AppModel) copyItem(item session.Item, pathOnly bool) tea.Cmd {
 
 func (a *AppModel) flashStatus(msg string, isError bool) tea.Cmd {
 	return func() tea.Msg {
-		return statusFlashMsg{Message: msg, IsError: isError}
+		a.statusFlash = msg
+		a.statusIsErr = isError
+		a.statusTimer = time.Now()
+		return clearFlashMsg{}
 	}
 }
 
-// View renders the TUI layout.
+// View renders the complete TUI layout.
 func (a *AppModel) View() string {
-	if !a.ready {
-		return "Initializing Vektix..."
+	width := a.width
+	if width < 40 {
+		width = 80
 	}
 
-	header := RenderStatusBar(a.width, a.scopeState, a.theme)
+	// 1. Top Status Bar
+	statusBar := RenderStatusBar(width, a.getScopeState(), a.theme)
 
-	var mainView string
+	// 2. Center Content Area (Viewport or Picker or Indexing)
+	var centerContent string
 	switch a.mode {
 	case ModePicker:
-		mainView = lipgloss.JoinVertical(
-			lipgloss.Left,
-			a.viewport.View(),
-			a.picker.View(a.width, a.theme),
-		)
+		centerContent = a.picker.View(width, a.theme)
 	case ModeIndexing:
-		mainView = lipgloss.JoinVertical(
-			lipgloss.Left,
-			a.viewport.View(),
-			a.indexer.View(a.width, a.theme),
-		)
+		centerContent = a.indexer.View(width, a.theme)
 	default:
-		mainView = a.viewport.View()
+		centerContent = a.viewport.View()
 	}
 
-	inputBox := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		a.theme.Prompt.Render("> "),
-		a.input.View(),
+	// 3. Status Flash / Error Notice
+	var flashLine string
+	if a.statusFlash != "" {
+		if a.statusIsErr {
+			flashLine = a.theme.ErrorText.Render("✗ " + a.statusFlash)
+		} else {
+			flashLine = a.theme.SuccessText.Render(a.statusFlash)
+		}
+	}
+
+	// 4. Bottom Input Box
+	inputBox := lipgloss.NewStyle().MarginTop(1).Render(
+		lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			a.theme.Prompt.Render("❯ "),
+			a.input.View(),
+		),
 	)
 
-	divider := a.theme.Gutter.Render(strings.Repeat("─", a.width))
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		header,
-		divider,
-		mainView,
-		divider,
-		inputBox,
-	)
-}
-
-func isUnderScope(path, scope string) bool {
-	if scope == "" {
-		return true
+	// Compose Layout
+	elements := []string{statusBar}
+	if flashLine != "" {
+		elements = append(elements, flashLine)
 	}
-	if path == scope {
-		return true
-	}
-	sep := string(filepath.Separator)
-	return strings.HasPrefix(path, strings.TrimSuffix(scope, sep)+sep)
+	elements = append(elements, centerContent, inputBox)
+
+	return lipgloss.JoinVertical(lipgloss.Left, elements...)
 }
