@@ -14,6 +14,7 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/config"
 	"github.com/Hendrixx-RE/Vektix/internal/excerpt"
 	"github.com/Hendrixx-RE/Vektix/internal/fileops"
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/resolve"
@@ -300,6 +301,11 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.indexer, cmd = a.indexer.Update(msg)
 		return a, cmd
 
+	case IndexTickMsg:
+		var cmd tea.Cmd
+		a.indexer, cmd = a.indexer.Update(msg)
+		return a, cmd
+
 	case IndexDoneMsg:
 		var cmd tea.Cmd
 		a.indexer, cmd = a.indexer.Update(msg)
@@ -564,7 +570,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			a.sessionRefs.Clear()
 			a.history = append(a.history, ChatEntry{
 				IsUser:     false,
-				SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", HumanInt(a.scopeState.Total)),
+				SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.scopeState.Total)),
 				Timestamp:  time.Now(),
 			})
 		} else {
@@ -588,7 +594,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		a.sessionRefs.Clear()
 		a.history = append(a.history, ChatEntry{
 			IsUser:     false,
-			SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", HumanInt(a.scopeState.Total)),
+			SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.scopeState.Total)),
 			Timestamp:  time.Now(),
 		})
 		a.refreshViewport()
@@ -678,16 +684,18 @@ func (a *AppModel) handleSessionReferenceAction(input string) tea.Cmd {
 		}
 	}
 
-	// Pattern: standalone ordinal reference like "#2", "3", "the second one"
-	if item, idx, ok := a.sessionRefs.ResolveRef(lower); ok {
-		a.setActiveResultIndex(idx)
-		a.history = append(a.history, ChatEntry{
-			IsUser:     false,
-			SuccessMsg: fmt.Sprintf("✓ Selected match #%d: %s", idx+1, DisplayPath(item.Path)),
-			Timestamp:  time.Now(),
-		})
-		a.refreshViewport()
-		return nil
+	// Pattern: standalone explicit ordinal/pronoun reference like "#2", "the second one", "that pdf"
+	if session.IsExplicitRef(lower) {
+		if item, idx, ok := a.sessionRefs.ResolveRef(lower); ok {
+			a.setActiveResultIndex(idx)
+			a.history = append(a.history, ChatEntry{
+				IsUser:     false,
+				SuccessMsg: fmt.Sprintf("✓ Selected match #%d: %s", idx+1, format.DisplayPath(item.Path)),
+				Timestamp:  time.Now(),
+			})
+			a.refreshViewport()
+			return nil
+		}
 	}
 
 	return nil
@@ -936,7 +944,7 @@ func (a *AppModel) formatEmptyMessage(query string, weakHits int) string {
 			query, a.scopeState.Describe(), weakHits)
 	}
 	return fmt.Sprintf("no matches for %q in scope %s (press [g] to search all %s chunks globally)",
-		query, a.scopeState.Describe(), HumanInt(a.scopeState.Total))
+		query, a.scopeState.Describe(), format.HumanInt(a.scopeState.Total))
 }
 
 // Keybind Action Triggers
@@ -986,7 +994,7 @@ func (a *AppModel) streamExplain(entryIdx int, item session.Item, modelName stri
 		defer cancel()
 
 		promptText := fmt.Sprintf("File: %s\n```\n%s\n```\nExplain what this code or document section does and why it is significant.",
-			DisplayPath(item.Path), item.Content)
+			format.DisplayPath(item.Path), item.Content)
 
 		numCtx := a.cfg.Ollama.Context.ExplainNumCtx
 		if numCtx <= 0 {
@@ -1043,7 +1051,7 @@ func (a *AppModel) triggerToggleGlobal() tea.Cmd {
 	a.updateScope(a.scopePinned, newGlobal)
 	a.sessionRefs.Clear()
 
-	msg := fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", HumanInt(a.scopeState.Total))
+	msg := fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.scopeState.Total))
 	if !newGlobal {
 		msg = fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", a.scopeState.Describe())
 	}
@@ -1124,18 +1132,18 @@ func (a *AppModel) getActiveItem() (session.Item, bool) {
 func (a *AppModel) openItem(item session.Item) tea.Cmd {
 	err := a.openFn(item.Path, false, a.cfg)
 	if err != nil {
-		return a.flashStatus(fmt.Sprintf("could not open %s: %v", DisplayPath(item.Path), err), true)
+		return a.flashStatus(fmt.Sprintf("could not open %s: %v", format.DisplayPath(item.Path), err), true)
 	}
 
 	locInfo := ""
 	if item.Locator.Start > 0 {
 		locInfo = fmt.Sprintf(":%d", item.Locator.Start)
 	}
-	return a.flashStatus(fmt.Sprintf("✓ opened %s%s in editor", DisplayPath(item.Path), locInfo), false)
+	return a.flashStatus(fmt.Sprintf("✓ opened %s%s in editor", format.DisplayPath(item.Path), locInfo), false)
 }
 
 func (a *AppModel) copyItem(item session.Item, pathOnly bool) tea.Cmd {
-	payload := DisplayPath(item.Path)
+	payload := format.DisplayPath(item.Path)
 	modeDesc := "path"
 	if !pathOnly {
 		payload = item.Content
@@ -1147,7 +1155,7 @@ func (a *AppModel) copyItem(item session.Item, pathOnly bool) tea.Cmd {
 		return a.flashStatus(fmt.Sprintf("clipboard copy failed: %v", err), true)
 	}
 
-	return a.flashStatus(fmt.Sprintf("✓ copied %s of %s to clipboard (%s)", modeDesc, DisplayPath(item.Path), mechanism), false)
+	return a.flashStatus(fmt.Sprintf("✓ copied %s of %s to clipboard (%s)", modeDesc, format.DisplayPath(item.Path), mechanism), false)
 }
 
 func (a *AppModel) flashStatus(msg string, isError bool) tea.Cmd {

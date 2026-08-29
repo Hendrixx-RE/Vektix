@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/router"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
@@ -170,6 +171,12 @@ func TestApp_SearchResultsAndActions(t *testing.T) {
 	if *copiedText == "" {
 		t.Errorf("expected copy via 'copy that'")
 	}
+
+	// Test that a plain search query like "server" is NOT hijacked as a session ref selection
+	cmd := app.handleSessionReferenceAction("server")
+	if cmd != nil {
+		t.Errorf("plain query 'server' should NOT be intercepted as session reference action")
+	}
 }
 
 func TestApp_PickerIntegration(t *testing.T) {
@@ -226,5 +233,37 @@ func TestApp_GlobalToggleKey(t *testing.T) {
 
 	if app.scopeState.Global == wasGlobal {
 		t.Errorf("expected scope global state to toggle after 'g'")
+	}
+}
+
+func TestApp_IndexProgressAndAnimation(t *testing.T) {
+	app, _, _ := newTestApp(t)
+
+	app.mode = ModeIndexing
+	app.indexer.Running = true
+
+	// Progress message arrives
+	app.Update(IndexProgressMsg{
+		Progress: index.Progress{Scanned: 50, Indexed: 10, Chunks: 35},
+	})
+	if app.indexer.Progress.Scanned != 50 || app.indexer.Progress.Chunks != 35 {
+		t.Errorf("expected index progress updated in model, got %+v", app.indexer.Progress)
+	}
+
+	// Spinner tick arrives
+	app.Update(IndexTickMsg{})
+	if app.indexer.SpinnerIndex != 1 {
+		t.Errorf("expected spinnerIndex 1 after tick, got %d", app.indexer.SpinnerIndex)
+	}
+
+	// Done message arrives
+	app.Update(IndexDoneMsg{
+		Result: &index.Result{
+			Files:  []string{"/a/b.go"},
+			Chunks: 5,
+		},
+	})
+	if app.indexer.Running {
+		t.Errorf("expected indexer running = false after IndexDoneMsg")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 )
 
 func TestStatus_ResolveScopeState(t *testing.T) {
@@ -69,13 +70,13 @@ func TestStatus_FormattingAndRendering(t *testing.T) {
 }
 
 func TestStatus_HumanIntAndDisplayPath(t *testing.T) {
-	if s := HumanInt(1234567); s != "1,234,567" {
+	if s := format.HumanInt(1234567); s != "1,234,567" {
 		t.Errorf("expected '1,234,567', got %s", s)
 	}
-	if s := HumanInt(42); s != "42" {
+	if s := format.HumanInt(42); s != "42" {
 		t.Errorf("expected '42', got %s", s)
 	}
-	if s := HumanInt(0); s != "0" {
+	if s := format.HumanInt(0); s != "0" {
 		t.Errorf("expected '0', got %s", s)
 	}
 }

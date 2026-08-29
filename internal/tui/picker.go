@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -157,7 +158,7 @@ func (p PickerModel) View(width int, theme Theme) string {
 			armStr = fmt.Sprintf(" (%s, rank %d)", strings.Join(item.Arms, "+"), item.Rank)
 		}
 
-		line := fmt.Sprintf("[%d] %s%s%s", i+1, DisplayPath(item.Path), locStr, armStr)
+		line := fmt.Sprintf("[%d] %s%s%s", i+1, format.DisplayPath(item.Path), locStr, armStr)
 
 		if i == p.Cursor {
 			rows = append(rows, theme.PickerSelected.Render("> "+line))

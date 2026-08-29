@@ -50,17 +50,14 @@ func TestSessionRefs_Resolution(t *testing.T) {
 		{"2nd", 1, "/path/to/resume.pdf"},
 		{"3rd", 2, "/path/to/config.yaml"},
 		{"4th", 3, "/path/to/notes.md"},
-		{"1", 0, "/path/to/main.go"},
-		{"2", 1, "/path/to/resume.pdf"},
-		// Extension / type qualifiers
+		// Demonstrative file qualifiers
 		{"that pdf", 1, "/path/to/resume.pdf"},
 		{"the pdf", 1, "/path/to/resume.pdf"},
 		{"the go file", 0, "/path/to/main.go"},
 		{"the yaml file", 2, "/path/to/config.yaml"},
 		{"that markdown", 3, "/path/to/notes.md"},
-		// Substring
-		{"resume", 1, "/path/to/resume.pdf"},
-		{"config", 2, "/path/to/config.yaml"},
+		{"that resume", 1, "/path/to/resume.pdf"},
+		{"the main.go", 0, "/path/to/main.go"},
 	}
 
 	for _, tc := range tests {
@@ -78,6 +75,17 @@ func TestSessionRefs_Resolution(t *testing.T) {
 		})
 	}
 
+	// Bare terms should NOT match as session references (prevents query hijacking)
+	bareQueries := []string{"resume", "config", "notes", "main", "server", "docker"}
+	for _, q := range bareQueries {
+		if _, _, ok := s.ResolveRef(q); ok {
+			t.Errorf("bare query %q should NOT resolve as session ref", q)
+		}
+		if IsExplicitRef(q) {
+			t.Errorf("IsExplicitRef(%q) should be false", q)
+		}
+	}
+
 	// Out of bounds
 	if _, _, ok := s.ResolveRef("#5"); ok {
 		t.Errorf("expected #5 to fail on 4-item list")
@@ -93,6 +101,28 @@ func TestSessionRefs_Resolution(t *testing.T) {
 	}
 	if _, _, ok := s.ResolveRef("it"); ok {
 		t.Errorf("expected resolution to fail after Clear()")
+	}
+}
+
+func TestSessionRefs_IsExplicitRef(t *testing.T) {
+	validRefs := []string{
+		"it", "that", "this", "the file", "the match",
+		"the first one", "first", "the second one", "second", "#1", "#2", "1st", "2nd", "last",
+		"that pdf", "the go file", "that server.go",
+	}
+	for _, r := range validRefs {
+		if !IsExplicitRef(r) {
+			t.Errorf("expected IsExplicitRef(%q) = true, got false", r)
+		}
+	}
+
+	invalidRefs := []string{
+		"resume", "docker notes", "what is my password", "main.go", "postgres url",
+	}
+	for _, r := range invalidRefs {
+		if IsExplicitRef(r) {
+			t.Errorf("expected IsExplicitRef(%q) = false, got true", r)
+		}
 	}
 }
 

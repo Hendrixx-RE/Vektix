@@ -2,12 +2,10 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 	"github.com/Hendrixx-RE/Vektix/internal/resolve"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -28,7 +26,7 @@ func (s ScopeState) Name() string {
 	if s.Global || s.Path == "" {
 		return "global"
 	}
-	return DisplayPath(s.Path)
+	return format.DisplayPath(s.Path)
 }
 
 // Describe returns the scope plus its chunk count (e.g. "~/projects/go/vektix (412 chunks)").
@@ -36,7 +34,7 @@ func (s ScopeState) Describe() string {
 	if !s.HasIndex {
 		return fmt.Sprintf("%s (no index)", s.Name())
 	}
-	return fmt.Sprintf("%s (%s chunks)", s.Name(), HumanInt(s.Chunks))
+	return fmt.Sprintf("%s (%s chunks)", s.Name(), format.HumanInt(s.Chunks))
 }
 
 // Banner returns the single-line summary shown in status bars and messages.
@@ -45,10 +43,10 @@ func (s ScopeState) Banner() string {
 	case !s.HasIndex:
 		return fmt.Sprintf("scope: %s — %s", s.Name(), s.IndexError)
 	case s.Global:
-		return fmt.Sprintf("scope: global (%s chunks)", HumanInt(s.Total))
+		return fmt.Sprintf("scope: global (%s chunks)", format.HumanInt(s.Total))
 	default:
 		return fmt.Sprintf("scope: %s (%s of %s chunks)",
-			s.Name(), HumanInt(s.Chunks), HumanInt(s.Total))
+			s.Name(), format.HumanInt(s.Chunks), format.HumanInt(s.Total))
 	}
 }
 
@@ -95,9 +93,9 @@ func RenderStatusBar(width int, st ScopeState, theme Theme) string {
 	if !st.HasIndex {
 		scopeBadge = theme.ErrorText.Render("no index")
 	} else if st.Global || st.Path == "" {
-		scopeBadge = theme.ScopeGlobal.Render(fmt.Sprintf("scope: global (%s)", HumanInt(st.Total)))
+		scopeBadge = theme.ScopeGlobal.Render(fmt.Sprintf("scope: global (%s)", format.HumanInt(st.Total)))
 	} else {
-		scopeBadge = theme.ScopeBadge.Render(fmt.Sprintf("scope: %s (%s)", st.Name(), HumanInt(st.Chunks)))
+		scopeBadge = theme.ScopeBadge.Render(fmt.Sprintf("scope: %s (%s)", st.Name(), format.HumanInt(st.Chunks)))
 	}
 
 	hint := lipgloss.JoinHorizontal(
@@ -130,35 +128,4 @@ func RenderStatusBar(width int, st ScopeState, theme Theme) string {
 	)
 
 	return theme.StatusBar.Width(width).Render(barContent)
-}
-
-// DisplayPath formats a path by replacing $HOME with ~ for clean rendering.
-func DisplayPath(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return path
-	}
-	if path == home {
-		return "~"
-	}
-	if strings.HasPrefix(path, home+string(filepath.Separator)) {
-		return "~" + path[len(home):]
-	}
-	return path
-}
-
-// HumanInt formats an integer with thousands comma separators.
-func HumanInt(n int) string {
-	s := strconv.Itoa(n)
-	if n < 0 {
-		return s
-	}
-	var b strings.Builder
-	for i, r := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			b.WriteByte(',')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }

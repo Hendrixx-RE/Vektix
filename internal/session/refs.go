@@ -80,8 +80,8 @@ func (s *Store) Clear() {
 }
 
 var (
-	hashNumberRe  = regexp.MustCompile(`^#?(\d+)(?:st|nd|rd|th)?$`)
-	fileExtWordRe = regexp.MustCompile(`^(?:that|the|this)?\s*([a-zA-Z0-9_-]+)(?:\s+file|\s+code|\s+document)?$`)
+	hashNumberRe       = regexp.MustCompile(`^#?(\d+)(?:st|nd|rd|th)?$`)
+	demonstrativeRefRe = regexp.MustCompile(`^(?:that|the|this)\s+([a-zA-Z0-9_.-]+)(?:\s+file|\s+code|\s+document)?$`)
 )
 
 var wordToOrdinal = map[string]int{
@@ -107,6 +107,83 @@ var wordToOrdinal = map[string]int{
 	"10th":     9,
 }
 
+var explicitPronouns = map[string]bool{
+	"it":          true,
+	"that":        true,
+	"this":        true,
+	"the file":    true,
+	"the match":   true,
+	"the excerpt": true,
+	"the result":  true,
+	"selected":    true,
+	"current":     true,
+}
+
+var extMap = map[string]string{
+	"pdf":      ".pdf",
+	"go":       ".go",
+	"md":       ".md",
+	"markdown": ".md",
+	"txt":      ".txt",
+	"text":     ".txt",
+	"json":     ".json",
+	"yaml":     ".yaml",
+	"yml":      ".yml",
+	"toml":     ".toml",
+	"py":       ".py",
+	"python":   ".py",
+	"js":       ".js",
+	"ts":       ".ts",
+	"rs":       ".rs",
+	"rust":     ".rs",
+	"sh":       ".sh",
+	"c":        ".c",
+	"java":     ".java",
+}
+
+// IsExplicitRef tests whether a string is an explicit ordinal, pronoun, or
+// demonstrative qualifier reference (e.g. "it", "#2", "the third one", "that pdf").
+// Plain words like "resume" or "server" return false so they are never hijacked.
+func IsExplicitRef(ref string) bool {
+	norm := strings.ToLower(strings.TrimSpace(ref))
+	norm = strings.Trim(norm, "\"'`.,;!?")
+	if norm == "" {
+		return false
+	}
+
+	if explicitPronouns[norm] {
+		return true
+	}
+
+	if norm == "last" || norm == "the last" || norm == "the last one" || norm == "last one" {
+		return true
+	}
+
+	cleanOrdinal := strings.TrimPrefix(norm, "the ")
+	cleanOrdinal = strings.TrimSuffix(cleanOrdinal, " one")
+	cleanOrdinal = strings.TrimSpace(cleanOrdinal)
+	if _, ok := wordToOrdinal[cleanOrdinal]; ok {
+		return true
+	}
+
+	if strings.HasPrefix(norm, "#") {
+		return true
+	}
+
+	if m := hashNumberRe.FindStringSubmatch(cleanOrdinal); len(m) == 2 {
+		if strings.HasSuffix(cleanOrdinal, "st") || strings.HasSuffix(cleanOrdinal, "nd") ||
+			strings.HasSuffix(cleanOrdinal, "rd") || strings.HasSuffix(cleanOrdinal, "th") {
+			return true
+		}
+	}
+
+	if demonstrativeRefRe.MatchString(norm) {
+		return true
+	}
+
+	return false
+}
+
 // ResolveRef attempts to resolve a reference string (such as "it", "that",
 // "#2", "the third one", "that pdf", "last") to an Item in the session.
 // It returns the resolved item, its 0-based index, and true if found.
@@ -122,18 +199,7 @@ func (s *Store) ResolveRef(ref string) (*Item, int, bool) {
 	}
 
 	// 1. Direct pronouns referring to the top/current result
-	pronouns := map[string]bool{
-		"it":           true,
-		"that":         true,
-		"this":         true,
-		"the file":     true,
-		"the match":    true,
-		"the excerpt":  true,
-		"the result":   true,
-		"selected":     true,
-		"current":      true,
-	}
-	if pronouns[norm] {
+	if explicitPronouns[norm] {
 		item := s.items[0]
 		return &item, 0, true
 	}
@@ -169,30 +235,9 @@ func (s *Store) ResolveRef(ref string) (*Item, int, bool) {
 		}
 	}
 
-	// 5. File type qualifiers: "that pdf", "the go file", "the markdown file", "that json"
-	extMap := map[string]string{
-		"pdf":      ".pdf",
-		"go":       ".go",
-		"md":       ".md",
-		"markdown": ".md",
-		"txt":      ".txt",
-		"text":     ".txt",
-		"json":     ".json",
-		"yaml":     ".yaml",
-		"yml":      ".yml",
-		"toml":     ".toml",
-		"py":       ".py",
-		"python":   ".py",
-		"js":       ".js",
-		"ts":       ".ts",
-		"rs":       ".rs",
-		"rust":     ".rs",
-		"sh":       ".sh",
-		"c":        ".c",
-		"java":     ".java",
-	}
-
-	if m := fileExtWordRe.FindStringSubmatch(norm); len(m) == 2 {
+	// 5. Explicit demonstrative file type qualifiers: "that pdf", "the go file", "that server.go"
+	// Requires demonstrative prefix ("that", "the", "this") so bare queries like "resume" are never matched.
+	if m := demonstrativeRefRe.FindStringSubmatch(norm); len(m) == 2 {
 		token := m[1]
 		if targetExt, ok := extMap[token]; ok {
 			for i, it := range s.items {
@@ -203,21 +248,13 @@ func (s *Store) ResolveRef(ref string) (*Item, int, bool) {
 			}
 		}
 
-		// Also check if token matches filename or basename directly
+		// Also check if token matches filename or basename directly with demonstrative prefix
 		for i, it := range s.items {
 			base := strings.ToLower(filepath.Base(it.Path))
 			if strings.Contains(base, token) {
 				item := it
 				return &item, i, true
 			}
-		}
-	}
-
-	// 6. Substring match across paths
-	for i, it := range s.items {
-		if strings.Contains(strings.ToLower(it.Path), norm) {
-			item := it
-			return &item, i, true
 		}
 	}
 
