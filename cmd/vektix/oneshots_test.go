@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
 	"github.com/Hendrixx-RE/Vektix/internal/index"
@@ -116,7 +117,7 @@ func newFixture(t *testing.T) *fixture {
 		Locator:   store.Locator{Kind: store.LocatorLineRange, Start: 1, End: 1},
 	}
 
-	db, err := store.NewPersistentDB(filepath.Join(dataDir, storeDirName))
+	db, err := store.NewPersistentDB(index.StorePath(dataDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func newFixture(t *testing.T) *fixture {
 			otherDir:   1,
 		},
 	}
-	if err := m.SaveManifest(filepath.Join(dataDir, manifestFileName)); err != nil {
+	if err := m.SaveManifest(index.ManifestPath(dataDir)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -344,5 +345,158 @@ func TestLocate_MissingManifestGivesReindexGuidance(t *testing.T) {
 	msg := errOut.String()
 	if !strings.Contains(msg, "vektix index") || !strings.Contains(msg, "vektix reindex") {
 		t.Errorf("missing-manifest error should point at 'vektix index'/'vektix reindex'; got: %s", msg)
+	}
+}
+
+// TestStatus_WithIndex tests the human-readable output of vektix status
+// when an index exists.
+func TestStatus_WithIndex(t *testing.T) {
+	f := newFixture(t)
+	e, out, _ := f.testEnv(f.projectDir)
+
+	code := runStatus(e, nil)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	str := out.String()
+	if !strings.Contains(str, "Vektix Status") {
+		t.Errorf("expected header 'Vektix Status', got: %s", str)
+	}
+	if !strings.Contains(str, "Index Chunks:") || !strings.Contains(str, "2 (2 files)") {
+		t.Errorf("expected 2 chunks (2 files), got: %s", str)
+	}
+	if !strings.Contains(str, "mock-embed") {
+		t.Errorf("expected model mock-embed, got: %s", str)
+	}
+	if !strings.Contains(str, "Active Scope:") {
+		t.Errorf("expected Active Scope, got: %s", str)
+	}
+	if !strings.Contains(str, "Quarantine:     clean") {
+		t.Errorf("expected clean quarantine, got: %s", str)
+	}
+}
+
+// TestStatus_NoIndex tests status output when no index is present.
+func TestStatus_NoIndex(t *testing.T) {
+	f := newFixture(t)
+	cfg := f.cfg
+	var out, errOut bytes.Buffer
+	e := &env{
+		cfg:     &cfg,
+		dataDir: t.TempDir(),
+		cwd:     f.projectDir,
+		stdout:  &out,
+		stderr:  &errOut,
+	}
+
+	code := runStatus(e, nil)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for status with no index, got %d", code)
+	}
+	str := strings.ToLower(out.String())
+	if !strings.Contains(str, "no index found") {
+		t.Errorf("expected 'no index found', got: %s", out.String())
+	}
+}
+
+// TestStatus_JSON tests the machine-readable JSON output of vektix status.
+func TestStatus_JSON(t *testing.T) {
+	f := newFixture(t)
+	e, out, _ := f.testEnv(f.projectDir)
+
+	code := runStatus(e, []string{"--json"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+
+	payload := decodeJSON(t, out.Bytes())
+	if payload["command"] != "status" {
+		t.Errorf("expected command 'status', got %v", payload["command"])
+	}
+	if payload["has_index"] != true {
+		t.Errorf("expected has_index true, got %v", payload["has_index"])
+	}
+	manifest, ok := payload["manifest"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected manifest map, got %v", payload["manifest"])
+	}
+	if manifest["embedding_model"] != "mock-embed" {
+		t.Errorf("expected mock-embed, got %v", manifest["embedding_model"])
+	}
+	if int(manifest["total_files"].(float64)) != 2 {
+		t.Errorf("expected 2 total files, got %v", manifest["total_files"])
+	}
+}
+
+// TestStatus_Quarantine verifies that quarantined files are reported.
+func TestStatus_Quarantine(t *testing.T) {
+	f := newFixture(t)
+	qEntries := []index.QuarantineEntry{
+		{Path: "/tmp/corrupt.pdf", Reason: "pdf: stream not present", Time: time.Now()},
+	}
+	if err := index.SaveQuarantine(index.QuarantinePath(f.dataDir), qEntries); err != nil {
+		t.Fatal(err)
+	}
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runStatus(e, nil)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d", code)
+	}
+	str := out.String()
+	if !strings.Contains(str, "1 quarantined file(s)") {
+		t.Errorf("expected quarantine entry in status, got: %s", str)
+	}
+	if !strings.Contains(str, "corrupt.pdf") {
+		t.Errorf("expected corrupt.pdf in status, got: %s", str)
+	}
+}
+
+// TestStatus_ManifestMismatch tests that a manifest failing validity checks
+// surfaces the specific mismatch error instead of "No index found".
+func TestStatus_ManifestMismatch(t *testing.T) {
+	f := newFixture(t)
+	m := &index.Manifest{
+		EmbeddingModel: "different-model",
+		Dim:            4,
+		PrefixScheme:   "v1",
+		ChunkerVersion: 1,
+		Files:          map[string]index.FileMeta{},
+		DirCounts:      map[string]int{},
+	}
+	if err := m.SaveManifest(index.ManifestPath(f.dataDir)); err != nil {
+		t.Fatal(err)
+	}
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runStatus(e, nil)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for status, got %d", code)
+	}
+	str := out.String()
+	if strings.Contains(str, "No index found") {
+		t.Errorf("expected mismatch error instead of 'No index found', got: %s", str)
+	}
+	if !strings.Contains(str, "different-model") {
+		t.Errorf("expected mismatch to mention different-model, got: %s", str)
+	}
+}
+
+// TestStatus_CorruptQuarantine tests that a corrupt quarantine.json surfaces an error
+// instead of silently reporting clean.
+func TestStatus_CorruptQuarantine(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(index.QuarantinePath(f.dataDir), []byte("invalid json {{"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	e, out, _ := f.testEnv(f.projectDir)
+	code := runStatus(e, nil)
+	if code != 0 {
+		t.Fatalf("expected exit 0 for status, got %d", code)
+	}
+	str := out.String()
+	if !strings.Contains(str, "error loading quarantine") {
+		t.Errorf("expected quarantine loading error, got: %s", str)
 	}
 }

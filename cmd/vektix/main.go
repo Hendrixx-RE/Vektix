@@ -54,6 +54,8 @@ func main() {
 		listCmd(os.Args[2:])
 	case "sync":
 		syncCmd(os.Args[2:])
+	case "reindex":
+		reindexCmd(os.Args[2:])
 	case "status":
 		statusCmd(os.Args[2:])
 	case "eval":
@@ -84,6 +86,7 @@ Commands:
   copy      Copy file content or path to clipboard
   list      List files in a directory
   sync      Update index and purge orphans
+  reindex   Rebuild the index from scratch
   status    Show indexing and system status
   eval      Run evaluation suite
   version   Print version information
@@ -452,8 +455,17 @@ func syncCmd(args []string) {
 	runIndex(cfg, fs.Args(), index.ModeSync, false)
 }
 
-func statusCmd(args []string) {
-	fmt.Printf("not yet implemented: status (args=%v)\n", args)
+func reindexCmd(args []string) {
+	fs := flag.NewFlagSet("reindex", flag.ExitOnError)
+	_ = fs.Parse(args)
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	runIndex(cfg, fs.Args(), index.ModeReindex, false)
 }
 
 func evalCmd(args []string) {
