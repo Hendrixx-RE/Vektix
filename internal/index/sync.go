@@ -21,6 +21,7 @@ import (
 
 	"github.com/Hendrixx-RE/Vektix/internal/chunker"
 	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/parser"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
@@ -194,10 +195,11 @@ func SaveQuarantine(path string, entries []QuarantineEntry) error {
 
 // Engine runs the indexing pipeline.
 type Engine struct {
-	Store    VectorStore
-	Embedder Embedder
-	IndexCfg *config.IndexConfig
-	Identity Identity
+	Store       VectorStore
+	Embedder    Embedder
+	IndexCfg    *config.IndexConfig
+	ChunkingCfg *config.ChunkingConfig
+	Identity    Identity
 
 	// DataDir holds the manifest and quarantine list.
 	DataDir string
@@ -223,13 +225,15 @@ type Engine struct {
 // NewEngine builds an Engine from the loaded configuration.
 func NewEngine(cfg *config.Config, st VectorStore, emb Embedder, dataDir string) *Engine {
 	idxCfg := cfg.Index
+	chunkCfg := cfg.Chunking
 	return &Engine{
-		Store:     st,
-		Embedder:  emb,
-		IndexCfg:  &idxCfg,
-		Identity:  DefaultIdentity(cfg.Ollama.EmbeddingModel),
-		DataDir:   dataDir,
-		KeepAlive: cfg.Ollama.KeepAlive,
+		Store:       st,
+		Embedder:    emb,
+		IndexCfg:    &idxCfg,
+		ChunkingCfg: &chunkCfg,
+		Identity:    DefaultIdentity(cfg.Ollama.EmbeddingModel),
+		DataDir:     dataDir,
+		KeepAlive:   cfg.Ollama.KeepAlive,
 	}
 }
 
@@ -257,6 +261,10 @@ func (e *Engine) applyDefaults() {
 	}
 	if e.Identity.ChunkerVersion == 0 {
 		e.Identity.ChunkerVersion = ChunkerVersion
+	}
+	if e.ChunkingCfg == nil {
+		defaultChunking := config.DefaultConfig().Chunking
+		e.ChunkingCfg = &defaultChunking
 	}
 }
 
@@ -783,11 +791,18 @@ func (p *pipeline) parseFile(task *fileTask) error {
 // --- chunk ------------------------------------------------------------------
 
 func (p *pipeline) chunkFile(task *fileTask) error {
+	var chunkingCfg config.ChunkingConfig
+	if p.e.ChunkingCfg != nil {
+		chunkingCfg = *p.e.ChunkingCfg
+	} else {
+		chunkingCfg = config.DefaultConfig().Chunking
+	}
+
 	if task.pages != nil {
 		// PDFs are chunked per page so the locator can address a page, which
 		// is the only position a PDF reader can actually jump to.
 		for _, page := range task.pages {
-			for _, c := range chunker.Chunk(task.path, page.Content) {
+			for _, c := range chunker.Chunk(task.path, page.Content, chunkingCfg) {
 				c.Locator = store.Locator{
 					Kind:  store.LocatorPage,
 					Start: page.Number,
@@ -797,7 +812,7 @@ func (p *pipeline) chunkFile(task *fileTask) error {
 			}
 		}
 	} else {
-		task.chunks = chunker.Chunk(task.path, task.content)
+		task.chunks = chunker.Chunk(task.path, task.content, chunkingCfg)
 	}
 
 	for i := range task.chunks {
@@ -1100,38 +1115,15 @@ func underRoots(path string, roots []string) bool {
 // Summary renders the run exactly as documented in plan.md.
 func (r *Result) Summary() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "  %-10s%6s files\n", "scanned", formatCount(r.Scanned))
-	fmt.Fprintf(&b, "  %-10s%6s  (mtime + size match — skipped)\n", "unchanged", formatCount(r.Unchanged))
-	fmt.Fprintf(&b, "  %-10s%6s  (re-chunked, re-embedded)\n", "updated", formatCount(r.Updated))
-	fmt.Fprintf(&b, "  %-10s%6s\n", "added", formatCount(r.Added))
-	fmt.Fprintf(&b, "  %-10s%6s  (%s orphan chunks purged)\n", "removed", formatCount(r.Removed), formatCount(r.RemovedChunks))
+	fmt.Fprintf(&b, "  %-10s%6s files\n", "scanned", format.HumanInt(r.Scanned))
+	fmt.Fprintf(&b, "  %-10s%6s  (mtime + size match — skipped)\n", "unchanged", format.HumanInt(r.Unchanged))
+	fmt.Fprintf(&b, "  %-10s%6s  (re-chunked, re-embedded)\n", "updated", format.HumanInt(r.Updated))
+	fmt.Fprintf(&b, "  %-10s%6s\n", "added", format.HumanInt(r.Added))
+	fmt.Fprintf(&b, "  %-10s%6s  (%s orphan chunks purged)\n", "removed", format.HumanInt(r.Removed), format.HumanInt(r.RemovedChunks))
 	if len(r.Quarantined) > 0 {
-		fmt.Fprintf(&b, "  %-10s%6s  (see 'vektix status')\n", "quarantine", formatCount(len(r.Quarantined)))
+		fmt.Fprintf(&b, "  %-10s%6s  (see 'vektix status')\n", "quarantine", format.HumanInt(len(r.Quarantined)))
 	}
-	fmt.Fprintf(&b, "  %s\n", formatDuration(r.Elapsed))
+	fmt.Fprintf(&b, "  %s\n", format.FormatDuration(r.Elapsed))
 	return b.String()
 }
 
-func formatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	return fmt.Sprintf("%.1fs", d.Seconds())
-}
-
-// formatCount renders 1204 as "1,204".
-func formatCount(n int) string {
-	s := strconv.Itoa(n)
-	neg := ""
-	if strings.HasPrefix(s, "-") {
-		neg, s = "-", s[1:]
-	}
-	var b strings.Builder
-	for i, r := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			b.WriteByte(',')
-		}
-		b.WriteRune(r)
-	}
-	return neg + b.String()
-}

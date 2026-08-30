@@ -8,26 +8,28 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Hendrixx-RE/Vektix/internal/config"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 )
 
 var codeDeclRe = regexp.MustCompile(`^(func|def|class|function|fn|type|impl|pub\s+fn)\s+([a-zA-Z0-9_:]+)`)
 
-func ChunkCode(path, content string) []store.Chunk {
+func ChunkCode(path, content string, cfg config.ChunkingConfig) []store.Chunk {
+	cfg = normalizeConfig(cfg)
 	ext := strings.ToLower(filepath.Ext(path))
 	if ext == ".go" {
-		return chunkGo(path, content)
+		return chunkGo(path, content, cfg)
 	}
-	return chunkGenericCode(path, content)
+	return chunkGenericCode(path, content, cfg)
 }
 
-func chunkGo(path, content string) []store.Chunk {
+func chunkGo(path, content string, cfg config.ChunkingConfig) []store.Chunk {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, content, parser.ParseComments)
 	if err != nil {
 		// Fallback to generic if parse fails
-		return chunkGenericCode(path, content)
+		return chunkGenericCode(path, content, cfg)
 	}
 
 	var chunks []store.Chunk
@@ -51,7 +53,7 @@ func chunkGo(path, content string) []store.Chunk {
 			prefixText := strings.Join(prefixLines, "\n")
 			if strings.TrimSpace(prefixText) != "" {
 				// Windowed chunking for text
-				textChunks := ChunkText(path, prefixText)
+				textChunks := ChunkText(path, prefixText, cfg)
 				// Adjust line numbers
 				for i := range textChunks {
 					textChunks[i].Locator.Start += lastEndLine - 1
@@ -96,8 +98,8 @@ func chunkGo(path, content string) []store.Chunk {
 		}
 		
 		// If oversized, window it but retain signature
-		if ollama.EstimateTokens(declText) > maxTokens {
-			subChunks := windowOversizedCode(path, declText, startLine, sym)
+		if ollama.EstimateTokens(declText) > cfg.MaxTokens {
+			subChunks := windowOversizedCode(path, declText, startLine, sym, cfg)
 			chunks = append(chunks, subChunks...)
 		} else {
 			chunks = append(chunks, store.Chunk{
@@ -120,7 +122,7 @@ func chunkGo(path, content string) []store.Chunk {
 		remLines := lines[lastEndLine-1:]
 		remText := strings.Join(remLines, "\n")
 		if strings.TrimSpace(remText) != "" {
-			textChunks := ChunkText(path, remText)
+			textChunks := ChunkText(path, remText, cfg)
 			for i := range textChunks {
 				textChunks[i].Locator.Start += lastEndLine - 1
 				textChunks[i].Locator.End += lastEndLine - 1
@@ -132,7 +134,7 @@ func chunkGo(path, content string) []store.Chunk {
 	return chunks
 }
 
-func chunkGenericCode(path, content string) []store.Chunk {
+func chunkGenericCode(path, content string, cfg config.ChunkingConfig) []store.Chunk {
 	var chunks []store.Chunk
 	lines := strings.Split(content, "\n")
 	
@@ -143,8 +145,8 @@ func chunkGenericCode(path, content string) []store.Chunk {
 	flush := func(endLine int) {
 		text := currentChunk.String()
 		if len(strings.TrimSpace(text)) > 0 {
-			if ollama.EstimateTokens(text) > maxTokens {
-				subChunks := windowOversizedCode(path, text, startLine, currentSym)
+			if ollama.EstimateTokens(text) > cfg.MaxTokens {
+				subChunks := windowOversizedCode(path, text, startLine, currentSym, cfg)
 				chunks = append(chunks, subChunks...)
 			} else {
 				kind := store.LocatorLineRange
@@ -185,11 +187,11 @@ func chunkGenericCode(path, content string) []store.Chunk {
 	return chunks
 }
 
-func windowOversizedCode(path, text string, startLineOffset int, sym string) []store.Chunk {
+func windowOversizedCode(path, text string, startLineOffset int, sym string, cfg config.ChunkingConfig) []store.Chunk {
 	var chunks []store.Chunk
 	
 	// We use ChunkText to window it, then adjust locators and add signature.
-	textChunks := ChunkText(path, text)
+	textChunks := ChunkText(path, text, cfg)
 	
 	for _, tc := range textChunks {
 		content := tc.Content

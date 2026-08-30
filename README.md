@@ -258,23 +258,6 @@ Mapped against `plan.md`'s six phases:
   intent eval currently lives in `scripts/eval_intent.go` instead. No `locate_eval.jsonl` or
   `testdata/corpus/` exist yet, only `testdata/intent_eval.jsonl`.
 
-## Known gaps
-
-Documented honestly because they're real and currently open:
-
-1. **The `[chunking]` config block is dead.** `internal/chunker/text.go` hardcodes
-   `const (maxTokens = 256; overlapTokens = 50; minTokens = 20)`, and the dispatch entry point
-   `chunker.Chunk(path, content string)` (`internal/chunker/dispatch.go`) takes no config argument
-   at all. Editing `[chunking]` in `config.toml` has zero effect on chunking behavior.
-2. **`internal/excerpt/render.go` has three rendering bugs.** It emits ANSI highlight codes
-   (`\x1b[33m`) unconditionally, with no non-TTY or `--no-color` guard. It does not expand tabs
-   before computing gutter alignment. It pads the header to a target width using `len(headerLeft)`
-   — a byte length, not a display width — so any non-ASCII path misaligns the right-aligned rank
-   info. Separately, the `LocatorPage` case renders a **blank** gutter (`fmt.Sprintf(" %*s | ",
-   gutterWidth, "")`) instead of a page number, since PDF chunks don't carry line numbers.
-3. **`testdata/intent_eval.jsonl` is skewed.** It has 157 cases, but only 19 are tier-1
-   (fast-path); the remaining 138 are tier-2, so fast-path guard regressions have thin coverage.
-
 ## Development tooling
 
 `scripts/` holds two dev-only tools, not part of the `vektix` binary:

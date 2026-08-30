@@ -35,6 +35,7 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/resolve"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
+	"github.com/mattn/go-isatty"
 )
 
 const (
@@ -50,6 +51,39 @@ const (
 // ---------------------------------------------------------------------------
 // flags
 // ---------------------------------------------------------------------------
+
+type boolFlagState struct {
+	set bool
+	val bool
+}
+
+func (b *boolFlagState) String() string {
+	if !b.set {
+		return "false"
+	}
+	return strconv.FormatBool(b.val)
+}
+
+func (b *boolFlagState) Set(s string) error {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return err
+	}
+	b.val = v
+	b.set = true
+	return nil
+}
+
+func (b *boolFlagState) IsBoolFlag() bool {
+	return true
+}
+
+func isWriterTTY(w io.Writer) bool {
+	if f, ok := w.(*os.File); ok {
+		return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
+	}
+	return false
+}
 
 // oneShotFlags holds the flags shared by every one-shot, plus the few
 // command-specific ones. `unsafe` is populated here and nowhere else: it is a
@@ -177,9 +211,9 @@ func (e *env) loadCorpus() (*corpus, error) {
 	m, err := index.LoadManifest(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w at %s", errNoIndex, displayPath(manifestPath))
+			return nil, fmt.Errorf("%w at %s", errNoIndex, format.DisplayPath(manifestPath))
 		}
-		return nil, fmt.Errorf("reading %s: %w (run 'vektix reindex' to rebuild)", displayPath(manifestPath), err)
+		return nil, fmt.Errorf("reading %s: %w (run 'vektix reindex' to rebuild)", format.DisplayPath(manifestPath), err)
 	}
 	if err := checkManifest(m, e.cfg); err != nil {
 		return nil, err
@@ -323,7 +357,7 @@ func (sc *activeScope) name() string {
 	if sc.Global || sc.Path == "" {
 		return "global"
 	}
-	return displayPath(sc.Path)
+	return format.DisplayPath(sc.Path)
 }
 
 // describe is the scope plus its chunk count, e.g.
@@ -332,7 +366,7 @@ func (sc *activeScope) describe() string {
 	if !sc.HasIndex {
 		return fmt.Sprintf("%s (no index)", sc.name())
 	}
-	return fmt.Sprintf("%s (%s chunks)", sc.name(), humanInt(sc.Chunks))
+	return fmt.Sprintf("%s (%s chunks)", sc.name(), format.HumanInt(sc.Chunks))
 }
 
 func (sc *activeScope) banner() string {
@@ -340,10 +374,10 @@ func (sc *activeScope) banner() string {
 	case !sc.HasIndex:
 		return fmt.Sprintf("scope: %s — %s", sc.name(), sc.IndexError)
 	case sc.Global:
-		return fmt.Sprintf("scope: global (%s chunks)", humanInt(sc.Total))
+		return fmt.Sprintf("scope: global (%s chunks)", format.HumanInt(sc.Total))
 	default:
 		return fmt.Sprintf("scope: %s (%s of %s chunks) — --global searches everything",
-			sc.name(), humanInt(sc.Chunks), humanInt(sc.Total))
+			sc.name(), format.HumanInt(sc.Chunks), format.HumanInt(sc.Total))
 	}
 }
 
@@ -377,7 +411,7 @@ func (e *env) printScope(fl *oneShotFlags, sc *activeScope) {
 	fmt.Fprintln(e.stderr, sc.banner())
 	if sc.Unindexed {
 		fmt.Fprintf(e.stderr, "note: %s is not under any indexed root — searching globally. Run 'vektix index %s' to scope to it.\n",
-			displayPath(e.cwd), displayPath(e.cwd))
+			format.DisplayPath(e.cwd), format.DisplayPath(e.cwd))
 	}
 }
 
@@ -393,7 +427,7 @@ func (e *env) emptyMessage(sc *activeScope, query string, globalHits int) string
 			query, sc.describe(), globalHits)
 	}
 	return fmt.Sprintf("no matches for %q in scope %s; nothing in the full index either (%s chunks) — retry with --global to confirm, or 'vektix index <dir>' if it was never indexed",
-		query, sc.describe(), humanInt(sc.Total))
+		query, sc.describe(), format.HumanInt(sc.Total))
 }
 
 // ---------------------------------------------------------------------------
@@ -599,12 +633,12 @@ func runLocate(e *env, args []string) int {
 
 	e.printWarnings(warnings)
 	for _, r := range strong {
-		fmt.Fprintf(e.stdout, "%2d. %s  %s\n", r.rank, displayPath(r.chunk.Path), r.armLabel())
+		fmt.Fprintf(e.stdout, "%2d. %s  %s\n", r.rank, format.DisplayPath(r.chunk.Path), r.armLabel())
 	}
 	if len(weak) > 0 {
 		fmt.Fprintf(e.stderr, "\nweaker matches below the cutoff in scope %s:\n", sc.describe())
 		for _, r := range weak {
-			fmt.Fprintf(e.stderr, "    %s  %s\n", displayPath(r.chunk.Path), r.armLabel())
+			fmt.Fprintf(e.stderr, "    %s  %s\n", format.DisplayPath(r.chunk.Path), r.armLabel())
 		}
 	}
 	return 0
@@ -651,7 +685,7 @@ func (e *env) reportEmpty(fl *oneShotFlags, cmd string, sc *activeScope, c *corp
 	if len(weak) > 0 {
 		fmt.Fprintln(e.stderr, "nearest weak matches (below the cutoff, shown rather than guessed):")
 		for _, r := range weak {
-			fmt.Fprintf(e.stderr, "    %s  %s\n", displayPath(r.chunk.Path), r.armLabel())
+			fmt.Fprintf(e.stderr, "    %s  %s\n", format.DisplayPath(r.chunk.Path), r.armLabel())
 		}
 	}
 	return 1
@@ -723,7 +757,7 @@ func runRead(e *env, args []string) int {
 		}
 		if start > len(lines) {
 			return e.fail(fl, "read", sc,
-				fmt.Sprintf("%s has %d lines; line %d is past the end", displayPath(tgt.path), len(lines), start), 1)
+				fmt.Sprintf("%s has %d lines; line %d is past the end", format.DisplayPath(tgt.path), len(lines), start), 1)
 		}
 		if start > end {
 			start = end
@@ -749,7 +783,7 @@ func runRead(e *env, args []string) int {
 	}
 
 	// Header on stderr, exact bytes on stdout: `vektix read x | wc -l` stays true.
-	fmt.Fprintf(e.stderr, "%s:%d-%d (%d lines)\n", displayPath(tgt.path), start, end, end-start+1)
+	fmt.Fprintf(e.stderr, "%s:%d-%d (%d lines)\n", format.DisplayPath(tgt.path), start, end, end-start+1)
 	fmt.Fprintln(e.stdout, body)
 	return 0
 }
@@ -757,15 +791,15 @@ func runRead(e *env, args []string) int {
 func readErrorMessage(path string, err error) string {
 	msg := err.Error()
 	if strings.Contains(msg, "secrets denylist") {
-		return fmt.Sprintf("refused to read %s: it matches the secrets denylist. Pass --unsafe if you really mean it.", displayPath(path))
+		return fmt.Sprintf("refused to read %s: it matches the secrets denylist. Pass --unsafe if you really mean it.", format.DisplayPath(path))
 	}
 	if strings.Contains(msg, "outside indexed roots") {
-		return fmt.Sprintf("refused to read %s: it is outside the indexed roots and the current directory. Pass --unsafe to override.", displayPath(path))
+		return fmt.Sprintf("refused to read %s: it is outside the indexed roots and the current directory. Pass --unsafe to override.", format.DisplayPath(path))
 	}
 	if os.IsNotExist(err) {
-		return fmt.Sprintf("%s is no longer on disk — the index may be stale, run 'vektix sync'", displayPath(path))
+		return fmt.Sprintf("%s is no longer on disk — the index may be stale, run 'vektix sync'", format.DisplayPath(path))
 	}
-	return fmt.Sprintf("cannot read %s: %v", displayPath(path), err)
+	return fmt.Sprintf("cannot read %s: %v", format.DisplayPath(path), err)
 }
 
 // ---------------------------------------------------------------------------
@@ -777,13 +811,20 @@ func runExcerpt(e *env, args []string) int {
 	fs := flag.NewFlagSet("excerpt", flag.ContinueOnError)
 	fs.SetOutput(e.stderr)
 	fl.registerCommon(fs)
+	var noColorFlag boolFlagState
+	fs.Var(&noColorFlag, "no-color", "suppress ANSI colour highlight (defaults to true when stdout is not a TTY)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	query := strings.Join(fs.Args(), " ")
 	if query == "" {
-		fmt.Fprintln(e.stderr, "usage: vektix excerpt [--scope <dir>] [--global] [--json] <query>")
+		fmt.Fprintln(e.stderr, "usage: vektix excerpt [--scope <dir>] [--global] [--json] [--no-color] <query>")
 		return 2
+	}
+
+	noColor := !isWriterTTY(e.stdout)
+	if noColorFlag.set {
+		noColor = noColorFlag.val
 	}
 
 	sc := e.resolveActiveScope(fl)
@@ -827,7 +868,7 @@ func runExcerpt(e *env, args []string) int {
 		}
 		rendered = append(rendered, excerpt.Render(r.chunk, text, loc, excerpt.RenderConfig{
 			HeaderRankInfo: r.armLabel(),
-			NoColor:        false,
+			NoColor:        noColor,
 		}))
 	}
 
@@ -861,7 +902,7 @@ func runExcerpt(e *env, args []string) int {
 	}
 	top := strong[0]
 	fmt.Fprintf(e.stderr, "\n  open: vektix open %s   copy: vektix copy %s\n",
-		displayPath(top.chunk.Path), displayPath(top.chunk.Path))
+		format.DisplayPath(top.chunk.Path), format.DisplayPath(top.chunk.Path))
 	return 0
 }
 
@@ -909,7 +950,7 @@ func runOpen(e *env, args []string) int {
 	}
 
 	if err := e.openFn(tgt.path, fl.unsafe, e.cfg); err != nil {
-		return e.fail(fl, "open", sc, fmt.Sprintf("could not open %s: %v", displayPath(tgt.path), err), 1)
+		return e.fail(fl, "open", sc, fmt.Sprintf("could not open %s: %v", format.DisplayPath(tgt.path), err), 1)
 	}
 
 	if fl.jsonOut {
@@ -919,7 +960,7 @@ func runOpen(e *env, args []string) int {
 		}
 		return e.emitJSON(payload)
 	}
-	fmt.Fprintf(e.stderr, "opened %s\n", displayPath(tgt.path))
+	fmt.Fprintf(e.stderr, "opened %s\n", format.DisplayPath(tgt.path))
 	return 0
 }
 
@@ -959,7 +1000,7 @@ func runCopy(e *env, args []string) int {
 	}
 
 	mode := "excerpt"
-	payload := displayPath(tgt.path)
+	payload := format.DisplayPath(tgt.path)
 	start, end := tgt.start, tgt.end
 
 	if fl.pathOnly {
@@ -1004,9 +1045,9 @@ func runCopy(e *env, args []string) int {
 	}
 
 	if mode == "path" {
-		fmt.Fprintf(e.stderr, "copied path %s (%s)\n", displayPath(tgt.path), mechanism)
+		fmt.Fprintf(e.stderr, "copied path %s (%s)\n", format.DisplayPath(tgt.path), mechanism)
 	} else {
-		fmt.Fprintf(e.stderr, "copied %s:%d-%d (%s)\n", displayPath(tgt.path), start, end, mechanism)
+		fmt.Fprintf(e.stderr, "copied %s:%d-%d (%s)\n", format.DisplayPath(tgt.path), start, end, mechanism)
 	}
 	return 0
 }
@@ -1123,14 +1164,14 @@ func runList(e *env, args []string) int {
 		})
 	}
 
-	fmt.Fprintf(e.stderr, "listing: %s", displayPath(safeDir))
+	fmt.Fprintf(e.stderr, "listing: %s", format.DisplayPath(safeDir))
 	if outsideScope {
 		fmt.Fprintf(e.stderr, " (outside the active scope %s)", sc.name())
 	}
 	fmt.Fprintln(e.stderr)
 
 	if len(rows) == 0 {
-		fmt.Fprintf(e.stderr, "%s is empty\n", displayPath(safeDir))
+		fmt.Fprintf(e.stderr, "%s is empty\n", format.DisplayPath(safeDir))
 		return 1
 	}
 	for _, r := range rows {
@@ -1142,9 +1183,9 @@ func runList(e *env, args []string) int {
 		case r.IsDir:
 			fmt.Fprintf(e.stdout, "%-40s\n", name)
 		case r.Indexed > 0:
-			fmt.Fprintf(e.stdout, "%-40s %8s  indexed: %d chunks\n", name, humanBytes(r.Size), r.Indexed)
+			fmt.Fprintf(e.stdout, "%-40s %8s  indexed: %d chunks\n", name, format.HumanBytes(r.Size), r.Indexed)
 		default:
-			fmt.Fprintf(e.stdout, "%-40s %8s  not indexed\n", name, humanBytes(r.Size))
+			fmt.Fprintf(e.stdout, "%-40s %8s  not indexed\n", name, format.HumanBytes(r.Size))
 		}
 	}
 	return 0
@@ -1202,13 +1243,13 @@ func (e *env) resolveTarget(fl *oneShotFlags, sc *activeScope, cmd, arg string, 
 	}
 
 	if !fl.jsonOut {
-		fmt.Fprintf(e.stderr, "resolved %q → %s %s\n", arg, displayPath(safe), top.armLabel())
+		fmt.Fprintf(e.stderr, "resolved %q → %s %s\n", arg, format.DisplayPath(safe), top.armLabel())
 		others := dedupeByPath(strong)
 		if len(others) > 1 {
 			fmt.Fprint(e.stderr, "other candidates in scope: ")
 			var names []string
 			for _, o := range others[1:] {
-				names = append(names, displayPath(o.chunk.Path))
+				names = append(names, format.DisplayPath(o.chunk.Path))
 			}
 			fmt.Fprintln(e.stderr, strings.Join(names, ", "))
 		}
@@ -1320,19 +1361,6 @@ func looksLikePath(arg string) bool {
 	return strings.ContainsAny(arg, "/~") || strings.HasPrefix(arg, ".") || filepath.Ext(arg) != ""
 }
 
-// displayPath shortens $HOME to ~ so output matches how people refer to files.
-func displayPath(path string) string {
-	return format.DisplayPath(path)
-}
-
-func humanInt(n int) string {
-	return format.HumanInt(n)
-}
-
-func humanBytes(n int64) string {
-	return format.HumanBytes(n)
-}
-
 // ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
@@ -1410,7 +1438,7 @@ func runStatus(e *env, args []string) int {
 
 	fmt.Fprintln(e.stdout, "Vektix Status")
 	fmt.Fprintln(e.stdout, "=============")
-	fmt.Fprintf(e.stdout, "Data Directory: %s\n", displayPath(e.dataDir))
+	fmt.Fprintf(e.stdout, "Data Directory: %s\n", format.DisplayPath(e.dataDir))
 
 	if !sc.HasIndex {
 		if sc.IndexError != "" {
@@ -1420,13 +1448,13 @@ func runStatus(e *env, args []string) int {
 		}
 	} else {
 		m := c.manifest
-		fmt.Fprintf(e.stdout, "Index Chunks:   %s (%d files)\n", humanInt(len(c.chunks)), len(m.Files))
+		fmt.Fprintf(e.stdout, "Index Chunks:   %s (%d files)\n", format.HumanInt(len(c.chunks)), len(m.Files))
 		fmt.Fprintf(e.stdout, "Model:          %s (%d-dim, %s)\n", m.EmbeddingModel, m.Dim, m.PrefixScheme)
 		fmt.Fprintf(e.stdout, "Chunker:        version %d\n", m.ChunkerVersion)
 		if hasManifest {
 			fmt.Fprintf(e.stdout, "Last Sync:      %s (%s ago)\n",
 				manifestInfo.ModTime().Local().Format("2006-01-02 15:04:05"),
-				formatDuration(time.Since(manifestInfo.ModTime())))
+				format.FormatDuration(time.Since(manifestInfo.ModTime())))
 		}
 		fmt.Fprintln(e.stdout, "Indexed Roots:")
 		if len(m.Roots) == 0 {
@@ -1434,11 +1462,11 @@ func runStatus(e *env, args []string) int {
 		} else {
 			for _, r := range m.Roots {
 				count := m.DirCounts[r]
-				fmt.Fprintf(e.stdout, "  - %s (%s chunks)\n", displayPath(r), humanInt(count))
+				fmt.Fprintf(e.stdout, "  - %s (%s chunks)\n", format.DisplayPath(r), format.HumanInt(count))
 			}
 		}
 		if c != nil && c.store != nil {
-			fmt.Fprintf(e.stdout, "DB Load Time:   %s (%s chunks resident)\n", formatDuration(c.dbLoadTime), humanInt(c.store.Count()))
+			fmt.Fprintf(e.stdout, "DB Load Time:   %s (%s chunks resident)\n", format.FormatDuration(c.dbLoadTime), format.HumanInt(c.store.Count()))
 		} else if corpusErr != nil {
 			fmt.Fprintf(e.stdout, "DB Load Time:   error loading store: %v\n", corpusErr)
 		}
@@ -1446,7 +1474,7 @@ func runStatus(e *env, args []string) int {
 
 	fmt.Fprintf(e.stdout, "Active Scope:   %s\n", sc.describe())
 	if sc.Unindexed {
-		fmt.Fprintf(e.stdout, "                (CWD %s is not under any indexed root)\n", displayPath(e.cwd))
+		fmt.Fprintf(e.stdout, "                (CWD %s is not under any indexed root)\n", format.DisplayPath(e.cwd))
 	}
 
 	if qErr != nil {
@@ -1454,15 +1482,11 @@ func runStatus(e *env, args []string) int {
 	} else if len(quarantine) > 0 {
 		fmt.Fprintf(e.stdout, "Quarantine:     %d quarantined file(s):\n", len(quarantine))
 		for _, q := range quarantine {
-			fmt.Fprintf(e.stdout, "  - %s: %s (%s)\n", displayPath(q.Path), q.Reason, q.Time.Local().Format("2006-01-02 15:04"))
+			fmt.Fprintf(e.stdout, "  - %s: %s (%s)\n", format.DisplayPath(q.Path), q.Reason, q.Time.Local().Format("2006-01-02 15:04"))
 		}
 	} else {
 		fmt.Fprintln(e.stdout, "Quarantine:     clean (0 files)")
 	}
 
 	return 0
-}
-
-func formatDuration(d time.Duration) string {
-	return format.FormatDuration(d)
 }
