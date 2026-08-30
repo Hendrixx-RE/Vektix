@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/Hendrixx-RE/Vektix/internal/session"
 )
 
 type Intent struct {
@@ -55,22 +57,12 @@ func globShaped(s string) bool {
 	return false
 }
 
-// pathShapedOrRef: pathShaped, or an ordinal/session reference ('that', 'it', '#2', 'the first one').
+// pathShapedOrRef: pathShaped, or an ordinal/session reference recognized by session.IsExplicitRef.
 func pathShapedOrRef(s string) bool {
 	if pathShaped(s) {
 		return true
 	}
-	lower := strings.ToLower(s)
-	refs := []string{"that", "it", "the first one", "the second one", "the third one", "the last one"}
-	for _, ref := range refs {
-		if lower == ref {
-			return true
-		}
-	}
-	if strings.HasPrefix(lower, "#") {
-		return true
-	}
-	return false
+	return session.IsExplicitRef(s)
 }
 
 var fastPatterns = []Pattern{
