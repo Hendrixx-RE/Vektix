@@ -56,7 +56,7 @@ on a document push it to the top.
 Paths are first-class search targets, not just content: *"open my resume pdf"* is a path query, and
 the path arm tokenises basename, stem, parent directories, and extension for fuzzy matching.
 
-## Scoped fetching
+## Scoped fetching & ephemeral indexing
 
 Launching Vektix inside a directory confines search to that subtree — a view over the
 existing index, not a separate one. The path and BM25 arms filter **exactly** (`strings.HasPrefix`
@@ -78,9 +78,19 @@ scan, since chromem-go is brute-force either way.
 
 Scope resolution (`internal/resolve/scope.go`) implements the ladder: explicit `--scope` or
 `--global`/`-g` override, else CWD-under-an-indexed-root, else a signal to prompt the caller
-(or search globally with a clear notice in one-shot CLI mode). Searching a directory outside
-configured index roots can also trigger on-demand ephemeral scope indexing with automatic LRU
-expiry.
+(or search globally with a clear notice in one-shot CLI mode).
+
+### Ephemeral indexing & background reconcile
+
+- **Ephemeral scope indexing**: When invoking search in an unindexed directory, passing `--index-now`
+  in the CLI (or using `:index-here` in the TUI) indexes the directory on demand as a transient root.
+- **LRU eviction policy**: Transient roots are retained for 7 days (`transient_retention_days`) up
+  to a maximum of 10 transient roots (`max_transient_roots`). When `vektix sync` runs, expired or
+  excess least-recently-used transient roots and their chunks are automatically purged from the
+  store and manifest.
+- **Background reconcile (TUI only)**: On startup, the TUI launches a non-blocking background check
+  via an asynchronous Bubble Tea command; if any indexed root has changed, it reconciles the index in
+  the background while keeping the query interface interactive.
 
 ## Models
 
@@ -153,10 +163,15 @@ vektix index ~/Documents ~/notes ~/projects
 vektix
 ```
 
-## Interactive TUI
+## How to use
 
-Running `vektix` without arguments on a terminal (TTY), or explicitly running `vektix tui`, launches
-the full-screen interactive Bubble Tea interface.
+Vektix provides two primary workflows: an interactive terminal interface (TUI) for exploratory
+search and natural-language interaction, and fast one-shot CLI commands for scripts and piping.
+
+### Interactive TUI
+
+Running `vektix` with no arguments when `stdout` is a terminal (TTY), or explicitly running `vektix tui`,
+launches the full-screen interactive Bubble Tea interface:
 
 ```bash
 vektix                         # launches TUI scoped to CWD (or global if outside indexed roots)
@@ -164,36 +179,38 @@ vektix tui --scope ~/projects  # launches TUI confined to a specific subtree
 vektix tui --global            # launches TUI searching across all indexed roots
 ```
 
-### Keybinds (when input box is empty)
+#### Keybinds (when the input prompt is empty)
 
 | Key | Action | Description |
 |---|---|---|
 | `[o]` | Open | Open the active search result in your editor (`$EDITOR` or configured editor). |
 | `[c]` | Copy | Copy the active result's verbatim excerpt (or path) to clipboard. |
 | `[e]` | Explain | Stream an on-demand natural-language explanation of the passage via Ollama. |
-| `[n]` / `[p]` | Next / Prev | Cycle forward or backward through candidate matches from the last search. |
+| `[n]` | Next | Cycle forward to the next candidate match from the last search. |
+| `[p]` | Prev | Cycle backward to the previous candidate match from the last search. |
 | `[g]` | Toggle Global | Toggle between subtree-scoped search and global search across all roots. |
-| `[tab]` | Picker | Open candidate picker dialog to choose among ambiguous search matches. |
-| `[esc]` | Dismiss / Quit | Close the active picker/progress dialog, or quit Vektix. |
+| `[tab]` | Picker | Open candidate picker modal to navigate and select from ambiguous matches. |
+| `[esc]` | Dismiss / Quit | Close active picker or indexing view, or quit Vektix. |
 | `Ctrl+C` | Quit | Immediate exit. |
 
-### Colon commands
+#### Colon commands
 
-Type `:` into the input box to run interactive commands:
+Type `:` into the input box to run administrative and navigation commands:
 
 | Command | Description |
 |---|---|
-| `:scope <path>` | Switch active search scope to `<path>` (or `:scope global` for all roots). |
+| `:scope <path>` | Switch active search scope to `<path>` (or `:scope global` / `-g`). |
 | `:global` | Switch active search scope to global. |
 | `:index [dir]` | Run live indexing pass on configured roots or a specific directory. |
-| `:sync` | Re-walk indexed roots, update modified files, and purge orphaned chunks. |
+| `:index-here` (or `:index-transient`) | Index current working directory ephemerally as a transient root. |
+| `:sync` | Re-walk indexed roots, update modified files, purge orphans, and expire LRU transient roots. |
 | `:reindex` | Drop the existing collection and rebuild the index from scratch. |
-| `:status` | Print active scope, collection chunk counts, and index health. |
-| `:clear` | Clear conversation history and reset session ordinal references. |
+| `:status` | Display active search scope and indexed chunk statistics. |
+| `:clear` | Clear conversation history (capped at 200 entries) and reset session references. |
 | `:help` (or `:?`) | Show interactive command and keybind reference dialog. |
 | `:quit` (or `:q`, `:exit`) | Exit the TUI. |
 
-### Session references
+#### Session references
 
 The TUI maintains session context across consecutive queries (`internal/session/refs.go`), allowing
 natural-language references to previous search results:
@@ -205,6 +222,61 @@ natural-language references to previous search results:
 
 Changing the active scope (via `:scope`, `:global`, or `[g]`) automatically resets session references
 so subsequent actions never point to stale, differently-scoped results.
+
+#### On-demand explanation (`[e]xplain`)
+
+Pressing `[e]` (or typing `"explain that"`) in the TUI triggers an opt-in explanation of the active
+passage:
+- Uses `qwen2.5:3b-instruct` (configured via `cfg.Ollama.ExplainModel`), loaded into Ollama only on demand.
+- Stream idle timeout is configured via `cfg.Ollama.Timeouts.StreamIdleSeconds` (default: 30s; falls back to 60s if unset).
+- Context size is controlled by `cfg.Ollama.Context.ExplainNumCtx` (default: 8192).
+
+---
+
+### One-shot CLI commands
+
+Vektix commands can be run directly from the shell for fast lookups or script integration:
+
+```bash
+# Locate files by fuzzy path, keyword, or description
+$ vektix locate "postgres connection"
+scope: ~/projects/go/vektix (412 of 1,204 chunks) — --global searches everything
+ 1. pkg/db/pool.go  (path+bm25, rank 1)
+ 2. configs/database.json  (path, rank 2)
+
+# Excerpt matching passages with line numbers and syntax highlighting
+$ vektix excerpt "jwt authentication token"
+scope: ~/projects/go/vektix (412 of 1,204 chunks) — --global searches everything
+pkg/auth/jwt.go:14-26                                      (bm25+vec, rank 1)
+   14 | func ValidateToken(tokenString string) (*Claims, error) {
+   15 |     token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+   16 |         return jwtSecretKey, nil
+   17 |     })
+   18 |     if err != nil {
+   19 |         return nil, err
+   20 |     }
+   21 |     if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+   22 |         return claims, nil
+   23 |     }
+   24 |     return nil, ErrInvalidToken
+   25 | }
+
+  open: vektix open pkg/auth/jwt.go   copy: vektix copy pkg/auth/jwt.go
+
+# Open resolved file directly in your editor
+$ vektix open "jwt validation"
+opened /home/user/projects/go/vektix/pkg/auth/jwt.go
+
+# Copy passage or path directly to system clipboard
+$ vektix copy "jwt validation"
+copied pkg/auth/jwt.go:14-26 (wl-copy)
+
+# Read specific line ranges verbatim
+$ vektix read --lines 14-26 pkg/auth/jwt.go
+
+# Index an unindexed subtree ephemerally on the fly
+$ vektix locate --index-now "docker compose"
+```
 
 ## Configuration reference
 
@@ -234,12 +306,14 @@ intent_num_ctx  = 2048
 explain_num_ctx = 8192
 
 [index]
-index_dirs       = ["~/Documents", "~/notes", "~/projects"]
-extensions       = [".txt", ".md", ".pdf",
-                    ".go", ".py", ".js", ".ts", ".rs", ".sh", ".c", ".java",
-                    ".json", ".yaml", ".yml", ".toml"]
-max_file_size_mb = 50
-follow_symlinks  = false
+index_dirs               = ["~/Documents", "~/notes", "~/projects"]
+extensions               = [".txt", ".md", ".pdf",
+                            ".go", ".py", ".js", ".ts", ".rs", ".sh", ".c", ".java",
+                            ".json", ".yaml", ".yml", ".toml"]
+max_file_size_mb         = 50
+follow_symlinks          = false
+transient_retention_days = 7             # days to keep ephemeral scope indexes before LRU expiry
+max_transient_roots      = 10            # maximum number of ephemeral roots retained
 
 [index.exclude]
 dirs  = ["node_modules", ".git", "__pycache__", ".venv", "venv", ".cache",
@@ -280,13 +354,13 @@ Every subcommand `main()` dispatches to (`cmd/vektix/main.go` and `cmd/vektix/on
 | `doctor` | Implemented | Checks config load, data dir existence, Ollama reachability, required models. |
 | `version` | Implemented | Prints the `-ldflags`-stamped version (or `-v`/`--version`). |
 | `index <path>` | Implemented | Walks, parses, chunks, embeds in batches, and indexes files into the store. Flags: `--dry-run`, `--exclude`. |
-| `locate <query>` | Implemented | Fast model-free search (fuzzy path + BM25, vector fallback); prints ranked files. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--limit`. |
-| `read <path\|query>` | Implemented | Prints verbatim file content or line range (`path:A-B` or `--lines A-B`). Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`. |
-| `excerpt <query>` | Implemented | Natural boundary passage retrieval with line numbers, ANSI highlighting, and non-ASCII alignment. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--limit`, `--no-color`. |
-| `open <path\|query>` | Implemented | Resolves target and launches `$EDITOR`/`cfg.General.Editor` or `xdg-open`. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`. |
-| `copy [path] <target>` | Implemented | Copies excerpt or path to clipboard via `wl-copy` → `xclip` → `xsel` → OSC 52. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`. |
-| `list [path]` | Implemented | Lists directory contents with file sizes and indexed chunk counts. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`. |
-| `sync [paths...]` | Implemented | Re-walks roots, indexes added/changed files, and purges orphaned chunks of deleted or excluded files. |
+| `locate <query>` | Implemented | Fast model-free search (fuzzy path + BM25, vector fallback); prints ranked files. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`, `--limit`. |
+| `read <path\|query>` | Implemented | Prints verbatim file content or line range (`path:A-B` or `--lines A-B`). Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `excerpt <query>` | Implemented | Natural boundary passage retrieval with line numbers, ANSI highlighting, and non-ASCII alignment. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`, `--no-color`, `--limit`. |
+| `open <path\|query>` | Implemented | Resolves target and launches `$EDITOR`/`cfg.General.Editor` or `xdg-open`. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `copy [path] <target>` | Implemented | Copies excerpt or path to clipboard via `wl-copy` → `xclip` → `xsel` → OSC 52. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `list [path]` | Implemented | Lists directory contents with file sizes and indexed chunk counts. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `sync [paths...]` | Implemented | Re-walks roots, indexes added/changed files, purges orphaned chunks of deleted or excluded files, and evicts expired LRU transient roots. |
 | `reindex [paths...]` | Implemented | Drops existing chunks under roots and rebuilds the collection from scratch. |
 | `status` | Implemented | Displays data directory, chunk/file counts, model identity, last sync timestamp, indexed roots, active scope, and quarantine list (text or `--json`). |
 | `eval` | Implemented | Runs intent classification or locate retrieval benchmark evaluations against dataset files (`--dataset <path>`). Flags: `--dataset`, `--corpus`, `--data-dir`, `--json`, `--limit`. |
@@ -339,8 +413,8 @@ Mapped against `plan.md`'s six phases:
   BM25 index (`internal/resolve/bm25.go`), vector arm with adaptive oversampling (`internal/resolve/vector.go`),
   RRF fusion (`internal/resolve/fuse.go`), scope resolution ladder (`internal/resolve/scope.go`),
   natural boundary excerpt expansion (`internal/excerpt/expand.go`), ANSI rendering with display width
-  runewidth calculations, tab expansion, PDF page gutter rendering, and `--no-color` support
-  (`internal/excerpt/render.go`), and path confinement / secrets denylist safety enforcement (`internal/fileops/safety.go`).
+  runewidth calculations, tab expansion, PDF page gutter rendering, and `--no-color` support with non-TTY
+  auto-detection (`internal/excerpt/render.go`), and path confinement / secrets denylist safety enforcement (`internal/fileops/safety.go`).
   Fully wired to CLI one-shot commands (`locate`, `read`, `excerpt`, `open`, `copy`, `list`) and the TUI.
 - **Phase 4 — Router: done.** Guarded regex fast-path (Tier 1) with shape guards and session reference
   detection reuse (`internal/router/fastpath.go`), 100+ hijack regression tests across all patterns
@@ -350,7 +424,7 @@ Mapped against `plan.md`'s six phases:
 - **Phase 5 — TUI: done.** Interactive Bubble Tea TUI (`internal/tui/`), query loop with 2-tier router
   integration, verbatim excerpt rendering, ambiguous candidate picker (`[tab]`), active scope status bar,
   indexing progress card with `bubbles/spinner` and live stats, on-demand passage explanation (`[e]` via `explain_model`),
-  next/prev match cycling (`[n]`/`[p]`), capped chat history window, batch chunk loading via `store.GetByIDs`,
+  next/prev match cycling (`[n]`/`[p]`), capped chat history window (200 entries), batch chunk loading via `store.GetByIDs`,
   and session ordinal reference resolution.
 - **Phase 6 — Sync & polish: done.** `internal/index/sync.go` (reconciliation pass, orphan chunk purging,
   ephemeral scope LRU expiry, quarantine persistence) and `internal/session/refs.go` (session ordinal
