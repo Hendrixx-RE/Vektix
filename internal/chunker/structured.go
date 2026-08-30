@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Hendrixx-RE/Vektix/internal/config"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 )
 
@@ -14,7 +15,7 @@ var (
 	tomlKeyRe = regexp.MustCompile(`^(?:\[([a-zA-Z0-9_\.-]+)\]|([a-zA-Z0-9_-]+)\s*=)`)
 )
 
-func ChunkStructured(path, content string) []store.Chunk {
+func ChunkStructured(path, content string, cfg config.ChunkingConfig) []store.Chunk {
 	ext := strings.ToLower(filepath.Ext(path))
 	var keyRe *regexp.Regexp
 	switch ext {
@@ -27,7 +28,7 @@ func ChunkStructured(path, content string) []store.Chunk {
 	}
 
 	if keyRe == nil {
-		return ChunkText(path, content)
+		return ChunkText(path, content, cfg)
 	}
 
 	var chunks []store.Chunk

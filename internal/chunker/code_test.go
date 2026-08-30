@@ -3,6 +3,8 @@ package chunker
 import (
 	"strings"
 	"testing"
+
+	"github.com/Hendrixx-RE/Vektix/internal/config"
 )
 
 func TestChunkCodeGo(t *testing.T) {
@@ -27,7 +29,8 @@ func Oversized() {
 ` + strings.Repeat("\tfmt.Println(\"loooooong\")\n", 300) + `
 }
 `
-	chunks := ChunkCode("test.go", content)
+	cfg := config.ChunkingConfig{MaxTokens: 256, OverlapTokens: 50, MinTokens: 20}
+	chunks := ChunkCode("test.go", content, cfg)
 	if len(chunks) == 0 {
 		t.Fatalf("expected chunks")
 	}
@@ -64,7 +67,8 @@ func Oversized() {
 func TestChunkCodeMalformed(t *testing.T) {
 	// Must not panic
 	content := `func ( {} ( ( invalid go code // !@#$`
-	chunks := ChunkCode("invalid.go", content)
+	cfg := config.ChunkingConfig{MaxTokens: 256, OverlapTokens: 50, MinTokens: 20}
+	chunks := ChunkCode("invalid.go", content, cfg)
 	if len(chunks) == 0 {
 		t.Fatalf("expected chunks even on malformed input")
 	}
@@ -79,7 +83,8 @@ class MyClass:
     def method(self):
         pass
 `
-	chunks := ChunkCode("test.py", content)
+	cfg := config.ChunkingConfig{MaxTokens: 256, OverlapTokens: 50, MinTokens: 20}
+	chunks := ChunkCode("test.py", content, cfg)
 	if len(chunks) == 0 {
 		t.Fatalf("expected chunks")
 	}

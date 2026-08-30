@@ -2,6 +2,8 @@ package chunker
 
 import (
 	"testing"
+
+	"github.com/Hendrixx-RE/Vektix/internal/config"
 )
 
 func TestChunkStructuredJSON(t *testing.T) {
@@ -11,7 +13,8 @@ func TestChunkStructuredJSON(t *testing.T) {
     "nested": "value"
   }
 }`
-	chunks := ChunkStructured("test.json", content)
+	cfg := config.ChunkingConfig{MaxTokens: 256, OverlapTokens: 50, MinTokens: 20}
+	chunks := ChunkStructured("test.json", content, cfg)
 	if len(chunks) == 0 {
 		t.Fatalf("expected chunks")
 	}
@@ -25,7 +28,8 @@ services:
   db:
     image: postgres
 `
-	chunks := ChunkStructured("test.yaml", content)
+	cfg := config.ChunkingConfig{MaxTokens: 256, OverlapTokens: 50, MinTokens: 20}
+	chunks := ChunkStructured("test.yaml", content, cfg)
 	if len(chunks) == 0 {
 		t.Fatalf("expected chunks")
 	}
@@ -39,7 +43,8 @@ name = "test"
 [dependencies]
 pkg = "1.0"
 `
-	chunks := ChunkStructured("test.toml", content)
+	cfg := config.ChunkingConfig{MaxTokens: 256, OverlapTokens: 50, MinTokens: 20}
+	chunks := ChunkStructured("test.toml", content, cfg)
 	if len(chunks) == 0 {
 		t.Fatalf("expected chunks")
 	}

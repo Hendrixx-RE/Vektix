@@ -3,15 +3,29 @@ package chunker
 import (
 	"strings"
 
+	"github.com/Hendrixx-RE/Vektix/internal/config"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 )
 
-const (
-	maxTokens     = 256
-	overlapTokens = 50
-	minTokens     = 20
-)
+func normalizeConfig(cfg config.ChunkingConfig) config.ChunkingConfig {
+	if cfg.MaxTokens <= 0 {
+		cfg.MaxTokens = 256
+		if cfg.OverlapTokens == 0 {
+			cfg.OverlapTokens = 50
+		}
+		if cfg.MinTokens == 0 {
+			cfg.MinTokens = 20
+		}
+	}
+	if cfg.OverlapTokens < 0 {
+		cfg.OverlapTokens = 0
+	}
+	if cfg.OverlapTokens >= cfg.MaxTokens {
+		cfg.OverlapTokens = cfg.MaxTokens / 4
+	}
+	return cfg
+}
 
 type fragment struct {
 	text      string
@@ -71,10 +85,10 @@ func getFragments(content string) []fragment {
 	return frags
 }
 
-func splitOversized(frags []fragment) []fragment {
+func splitOversized(frags []fragment, cfg config.ChunkingConfig) []fragment {
 	var res []fragment
 	for _, f := range frags {
-		if f.tokens <= maxTokens {
+		if f.tokens <= cfg.MaxTokens {
 			res = append(res, f)
 			continue
 		}
@@ -88,7 +102,7 @@ func splitOversized(frags []fragment) []fragment {
 		
 		for _, w := range words {
 			wt := ollama.EstimateTokens(w)
-			if currTokens+wt > maxTokens && currTokens > 0 {
+			if currTokens+wt > cfg.MaxTokens && currTokens > 0 {
 				lines := strings.Count(currText, "\n")
 				res = append(res, fragment{
 					text:      currText,
@@ -119,14 +133,15 @@ func splitOversized(frags []fragment) []fragment {
 	return res
 }
 
-func ChunkText(path, content string) []store.Chunk {
+func ChunkText(path, content string, cfg config.ChunkingConfig) []store.Chunk {
+	cfg = normalizeConfig(cfg)
 	var chunks []store.Chunk
 	if content == "" {
 		return chunks
 	}
 
 	frags := getFragments(content)
-	frags = splitOversized(frags)
+	frags = splitOversized(frags, cfg)
 
 	if len(frags) == 0 {
 		return chunks
@@ -141,16 +156,20 @@ func ChunkText(path, content string) []store.Chunk {
 
 		j := i
 		stoppedForHeading := false
+		headingThreshold := cfg.MaxTokens - cfg.OverlapTokens - 50
+		if headingThreshold < 0 {
+			headingThreshold = 0
+		}
 		for ; j < len(frags); j++ {
 			f := frags[j]
 
 			// Prefer heading boundary if we already have a decent chunk size
-			if j > i && f.isHeading && chunkTokens >= (maxTokens-overlapTokens-50) {
+			if j > i && f.isHeading && chunkTokens >= headingThreshold {
 				stoppedForHeading = true
 				break
 			}
 
-			if chunkTokens+f.tokens > maxTokens && chunkTokens > 0 {
+			if chunkTokens+f.tokens > cfg.MaxTokens && chunkTokens > 0 {
 				break
 			}
 
@@ -159,7 +178,7 @@ func ChunkText(path, content string) []store.Chunk {
 			endLine = f.endLine
 		}
 
-		if chunkTokens >= minTokens || (j == len(frags) && len(chunks) == 0) {
+		if chunkTokens >= cfg.MinTokens || (j == len(frags) && len(chunks) == 0) {
 			chunks = append(chunks, store.Chunk{
 				Path:    path,
 				Content: chunkText.String(),
@@ -187,7 +206,7 @@ func ChunkText(path, content string) []store.Chunk {
 				break
 			}
 			overlapSum += frags[overlapIdx].tokens
-			if overlapSum >= overlapTokens {
+			if overlapSum >= cfg.OverlapTokens {
 				break
 			}
 			overlapIdx--

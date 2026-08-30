@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Hendrixx-RE/Vektix/internal/store"
+	"github.com/mattn/go-runewidth"
 )
 
 // RenderConfig holds options for rendering.
@@ -16,6 +17,31 @@ type RenderConfig struct {
 	// emit machine-readable output (--json), write to the clipboard, or render to a
 	// non-terminal must set it; escape codes there are corruption, not decoration.
 	NoColor bool
+}
+
+// expandTabs expands tab characters in s to spaces using a 4-space tabstop.
+func expandTabs(s string, tabWidth int) string {
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+	var b strings.Builder
+	col := 0
+	for _, r := range s {
+		if r == '\t' {
+			spaces := tabWidth - (col % tabWidth)
+			for i := 0; i < spaces; i++ {
+				b.WriteByte(' ')
+			}
+			col += spaces
+		} else if r == '\n' {
+			b.WriteRune(r)
+			col = 0
+		} else {
+			b.WriteRune(r)
+			col += runewidth.RuneWidth(r)
+		}
+	}
+	return b.String()
 }
 
 // Render formats the expanded text with a header, line numbers, a gutter, and highlights the matched span.
@@ -38,7 +64,9 @@ func Render(chunk store.Chunk, expandedText string, loc store.Locator, cfg Rende
 	// We want the total width to be around 80 chars, matching the example.
 	// Example: "~/notes/infra.md:41-47                                    (bm25+vec, rank 1)"
 	targetWidth := 80
-	padding := targetWidth - len(headerLeft) - len(cfg.HeaderRankInfo)
+	headerLeftWidth := runewidth.StringWidth(headerLeft)
+	rankInfoWidth := runewidth.StringWidth(cfg.HeaderRankInfo)
+	padding := targetWidth - headerLeftWidth - rankInfoWidth
 	if padding < 1 {
 		padding = 1
 	}
@@ -48,8 +76,11 @@ func Render(chunk store.Chunk, expandedText string, loc store.Locator, cfg Rende
 	buf.WriteByte('\n')
 
 	// 2. Render Body
-	matchStart := strings.Index(expandedText, chunk.Content)
-	matchEnd := matchStart + len(chunk.Content)
+	expandedText = expandTabs(expandedText, 4)
+	chunkContent := expandTabs(chunk.Content, 4)
+
+	matchStart := strings.Index(expandedText, chunkContent)
+	matchEnd := matchStart + len(chunkContent)
 	if matchStart == -1 {
 		// Fallback if not found (shouldn't happen in normal flow)
 		matchStart = -1
@@ -63,9 +94,14 @@ func Render(chunk store.Chunk, expandedText string, loc store.Locator, cfg Rende
 
 	lines := strings.Split(expandedText, "\n")
 	
-	// Determine gutter width based on max line number
-	maxLineNum := loc.Start + len(lines) - 1
-	gutterWidth := len(strconv.Itoa(maxLineNum))
+	// Determine gutter width based on max line number or page number
+	var gutterWidth int
+	if loc.Kind == store.LocatorPage {
+		gutterWidth = len(strconv.Itoa(loc.Start))
+	} else {
+		maxLineNum := loc.Start + len(lines) - 1
+		gutterWidth = len(strconv.Itoa(maxLineNum))
+	}
 	if gutterWidth < 4 {
 		gutterWidth = 4 // Minimum gutter width to match example nicely
 	}
@@ -74,10 +110,9 @@ func Render(chunk store.Chunk, expandedText string, loc store.Locator, cfg Rende
 	for i, line := range lines {
 		lineNum := loc.Start + i
 		
-		// For Page locators, we do not have absolute line numbers, so we omit them from the gutter.
 		var gutter string
 		if loc.Kind == store.LocatorPage {
-			gutter = fmt.Sprintf(" %*s | ", gutterWidth, "")
+			gutter = fmt.Sprintf(" %*d | ", gutterWidth, loc.Start)
 		} else {
 			gutter = fmt.Sprintf(" %*d | ", gutterWidth, lineNum)
 		}

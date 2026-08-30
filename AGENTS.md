@@ -39,10 +39,8 @@ internal/
                          call these from.
     sync.go               Empty stub (package index only).
   chunker/
-    dispatch.go             Chunk(path, content) dispatches by extension. Takes no config
-                         argument — see Hard rules, [chunking] is dead.
+    dispatch.go             Chunk(path, content, cfg) dispatches by extension.
     text.go               Prose chunker: sentence/paragraph/heading-aware, with overlap.
-                         Hardcodes maxTokens=256, overlapTokens=50, minTokens=20.
     code.go               go/ast-based chunking for .go (one chunk per top-level Decl,
                          signature captured as Locator.Symbol); regex-heuristic chunking for
                          other languages. Oversized decls fall back to ChunkText windowing
@@ -70,9 +68,7 @@ internal/
     expand.go               Grows a chunk to a natural boundary (paragraph/struct-key/Go decl
                          via go/ast/heuristic-decl for other code) before rendering, budgeted
                          by MaxLines.
-    render.go               Line numbers, gutter, ANSI highlight of the matched span. Has
-                         known rendering bugs — see README's Known gaps. Don't build on top of
-                         it without fixing those first if the fix is in scope.
+    render.go               Line numbers, gutter, ANSI highlight of the matched span.
   fileops/
     safety.go               ResolvePath: EvalSymlinks + Abs, secrets denylist, root
                          confinement. The single choke point every path must go through.
@@ -127,11 +123,6 @@ testdata/intent_eval.jsonl   157 cases, only 19 tier-1. No locate_eval.jsonl or 
   `testdata/` fixtures have each been caught pre-commit before. Dev-only tooling belongs in
   `scripts/` (see `eval_intent.go` / `gen_cases.py`), not the repo root.
 - **`gh pr create` needs both `--title` and `--body`**, or it fails non-interactively.
-- **`internal/chunker`'s `[chunking]` config is currently dead** (see README's Known gaps). If you
-  wire it up, thread it through `chunker.Chunk`/`ChunkText`/`ChunkCode`/`ChunkStructured` rather
-  than reading global config from inside the package — none of those functions take a config
-  argument today, and adding a package-level config read would make them harder to test in
-  isolation (every existing chunker test constructs inputs directly, with no config fixture).
 
 ## Build, test, lint
 

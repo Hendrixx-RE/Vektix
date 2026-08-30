@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
 )
@@ -244,7 +245,7 @@ func TestLocate_EmptyScopeNamesScopeAndOffersGlobal(t *testing.T) {
 		t.Fatalf("expected non-zero exit for empty scope, got 0")
 	}
 	msg := errOut.String()
-	if !strings.Contains(msg, displayPath(f.emptyDir)) {
+	if !strings.Contains(msg, format.DisplayPath(f.emptyDir)) {
 		t.Errorf("empty-result message must name the active scope %q; got: %s", f.emptyDir, msg)
 	}
 	if !strings.Contains(msg, "--global") {
@@ -276,6 +277,41 @@ func TestExcerpt_JSONHasNoANSI(t *testing.T) {
 	text := results[0].(map[string]any)["text"].(string)
 	if strings.ContainsRune(text, 0x1b) {
 		t.Errorf("excerpt text field contains an ANSI escape: %q", text)
+	}
+}
+
+// TestExcerpt_NoColorFlag tests default non-TTY ANSI suppression and explicit flag control.
+func TestExcerpt_NoColorFlag(t *testing.T) {
+	f := newFixture(t)
+
+	// In testEnv, e.stdout is a bytes.Buffer (not a TTY), so NoColor should default to true.
+	eDefault, outDefault, _ := f.testEnv(f.projectDir)
+	code := runExcerpt(eDefault, []string{"--scope=" + f.projectDir, "postgres"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, outDefault.String())
+	}
+	if bytes.ContainsRune(outDefault.Bytes(), 0x1b) {
+		t.Errorf("non-TTY default should not contain ANSI escape codes, got: %q", outDefault.String())
+	}
+
+	// Explicit --no-color=false overrides the non-TTY detection and produces ANSI codes.
+	eColor, outColor, _ := f.testEnv(f.projectDir)
+	code = runExcerpt(eColor, []string{"--scope=" + f.projectDir, "--no-color=false", "postgres"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, outColor.String())
+	}
+	if !bytes.ContainsRune(outColor.Bytes(), 0x1b) {
+		t.Errorf("--no-color=false should force ANSI highlight codes, got: %q", outColor.String())
+	}
+
+	// Explicit --no-color flag suppresses ANSI codes.
+	eNoColor, outNoColor, _ := f.testEnv(f.projectDir)
+	code = runExcerpt(eNoColor, []string{"--scope=" + f.projectDir, "--no-color", "postgres"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, outNoColor.String())
+	}
+	if bytes.ContainsRune(outNoColor.Bytes(), 0x1b) {
+		t.Errorf("--no-color should suppress ANSI escape codes, got: %q", outNoColor.String())
 	}
 }
 
