@@ -93,6 +93,7 @@ type oneShotFlags struct {
 	global   bool
 	jsonOut  bool
 	unsafe   bool
+	indexNow bool
 	limit    int
 	lines    string // read
 	pathOnly bool   // copy
@@ -104,6 +105,7 @@ func (f *oneShotFlags) registerCommon(fs *flag.FlagSet) {
 	fs.BoolVar(&f.global, "g", false, "shorthand for --global")
 	fs.BoolVar(&f.jsonOut, "json", false, "machine-readable output (no colour)")
 	fs.BoolVar(&f.unsafe, "unsafe", false, "allow paths outside the indexed roots and the secrets denylist")
+	fs.BoolVar(&f.indexNow, "index-now", false, "index unindexed CWD ephemerally before running command")
 	fs.IntVar(&f.limit, "limit", 0, "maximum number of results (0 = config default)")
 }
 
@@ -236,20 +238,23 @@ func (e *env) loadCorpus() (*corpus, error) {
 	}
 	sort.Strings(files)
 
-	ctx := context.Background()
+	var allIDs []string
+	idToPath := make(map[string]string)
 	for _, path := range files {
 		for _, id := range m.Files[path].Chunks {
-			chunk, err := db.GetByID(ctx, id)
-			if err != nil {
-				c.missing++
-				continue
-			}
-			if chunk.Path == "" {
-				chunk.Path = path
-			}
-			c.chunks = append(c.chunks, chunk)
+			allIDs = append(allIDs, id)
+			idToPath[id] = path
 		}
 	}
+
+	chunks, _ := db.GetByIDs(context.Background(), allIDs)
+	for i := range chunks {
+		if chunks[i].Path == "" {
+			chunks[i].Path = idToPath[chunks[i].ID]
+		}
+	}
+	c.chunks = chunks
+	c.missing = len(allIDs) - len(chunks)
 
 	c.paths = resolve.NewPathIndex(c.chunks)
 	c.bm25 = resolve.NewBM25Index(c.chunks)
@@ -264,6 +269,22 @@ func (e *env) loadCorpus() (*corpus, error) {
 		e.cfg.Ollama.EmbeddingModel, e.cfg.Ollama.KeepAlive, e.cfg.Search.OversampleFloor)
 
 	return c, nil
+}
+
+func (e *env) indexEphemeralSubtree(root string) {
+	st, err := store.NewPersistentDB(index.StorePath(e.dataDir))
+	if err != nil {
+		return
+	}
+	cli := ollama.NewClient(ollama.Options{
+		Host:         e.cfg.Ollama.Host,
+		EmbedTimeout: time.Duration(e.cfg.Ollama.Timeouts.EmbedBatchSeconds) * time.Second,
+	})
+	engine := index.NewEngine(e.cfg, st, cli, e.dataDir)
+	engine.Transient = true
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	_, _ = engine.Run(ctx, []string{root}, index.ModeIndex)
 }
 
 // checkManifest refuses to search an index that does not match the active
@@ -331,11 +352,24 @@ func (e *env) resolveActiveScope(fl *oneShotFlags) *activeScope {
 	if err != nil {
 		sc.Global = true
 	} else if res.RequiresPrompt && fl.scope == "" {
-		// A one-shot cannot prompt. Falling back to global is the honest choice:
-		// scoping to an unindexed directory would silently return nothing.
-		sc.Global = true
-		sc.Unindexed = true
-		sc.Path = ""
+		if fl.indexNow {
+			if !fl.jsonOut {
+				fmt.Fprintf(e.stderr, "indexing %s ephemerally (transient)...\n", format.DisplayPath(e.cwd))
+			}
+			e.indexEphemeralSubtree(e.cwd)
+			e.corpusDone = false
+			e.corpusOnce = nil
+			e.corpusErr = nil
+			sc.Path = e.cwd
+			sc.Global = false
+			sc.Unindexed = false
+		} else {
+			// A one-shot cannot prompt. Falling back to global is the honest choice:
+			// scoping to an unindexed directory would silently return nothing.
+			sc.Global = true
+			sc.Unindexed = true
+			sc.Path = ""
+		}
 	} else {
 		sc.Path = res.Path
 		sc.Global = res.Path == ""
@@ -410,7 +444,7 @@ func (e *env) printScope(fl *oneShotFlags, sc *activeScope) {
 	}
 	fmt.Fprintln(e.stderr, sc.banner())
 	if sc.Unindexed {
-		fmt.Fprintf(e.stderr, "note: %s is not under any indexed root — searching globally. Run 'vektix index %s' to scope to it.\n",
+		fmt.Fprintf(e.stderr, "note: %s is not under any indexed root — searching globally. Pass --index-now to index ephemerally, or run 'vektix index %s'.\n",
 			format.DisplayPath(e.cwd), format.DisplayPath(e.cwd))
 	}
 }
@@ -452,6 +486,12 @@ func (r searchResult) armLabel() string {
 func (c *corpus) search(ctx context.Context, e *env, query, scope string, k int, useVector bool) (strong, weak []searchResult, warnings []string) {
 	if query == "" {
 		return nil, nil, nil
+	}
+
+	if scope != "" && c.manifest != nil {
+		if c.manifest.TouchPath(scope) {
+			_ = c.manifest.SaveManifest(index.ManifestPath(e.dataDir))
+		}
 	}
 
 	lists := []resolve.ResultList{

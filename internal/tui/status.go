@@ -12,13 +12,14 @@ import (
 
 // ScopeState encapsulates the active search scope and its index statistics.
 type ScopeState struct {
-	Path       string // "" means global
-	Global     bool
-	Chunks     int
-	Total      int
-	HasIndex   bool
-	Unindexed  bool   // CWD is outside every indexed root
-	IndexError string
+	Path        string // "" means global
+	Global      bool
+	Chunks      int
+	Total       int
+	HasIndex    bool
+	Unindexed   bool   // CWD is outside every indexed root
+	IndexError  string
+	Reconciling bool
 }
 
 // Name returns the user-facing display string for the scope ("global" or shortened path).
@@ -112,7 +113,11 @@ func RenderStatusBar(width int, st ScopeState, theme Theme) string {
 		theme.KeyHintDesc.Render("cmd"),
 	)
 
-	left := lipgloss.JoinHorizontal(lipgloss.Center, logo, "  ", scopeBadge)
+	leftParts := []string{logo, "  ", scopeBadge}
+	if st.Reconciling {
+		leftParts = append(leftParts, "  ", theme.KeyHintDesc.Render("⟳ syncing..."))
+	}
+	left := lipgloss.JoinHorizontal(lipgloss.Center, leftParts...)
 	right := hint
 
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)

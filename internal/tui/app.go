@@ -23,6 +23,7 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/router"
 	"github.com/Hendrixx-RE/Vektix/internal/session"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,6 +35,7 @@ const (
 	maxWeakMatches      = 3
 	excerptLineBudget   = 12
 	queryCacheSize      = 128
+	maxChatHistory      = 200
 )
 
 // AppMode defines the current UI interaction mode.
@@ -190,7 +192,7 @@ func (a *AppModel) loadCorpus() {
 		return
 	}
 
-	manifest, err := index.LoadManifest(dataDir)
+	manifest, err := index.LoadManifest(index.ManifestPath(dataDir))
 	if err != nil {
 		st := a.getScopeState()
 		st.IndexError = "no index found in " + format.DisplayPath(dataDir)
@@ -225,18 +227,19 @@ func (a *AppModel) loadCorpus() {
 	}
 	sort.Strings(files)
 
-	ctx := context.Background()
-	var allChunks []store.Chunk
+	var allIDs []string
+	idToPath := make(map[string]string)
 	for _, path := range files {
 		for _, id := range manifest.Files[path].Chunks {
-			chunk, err := st.GetByID(ctx, id)
-			if err != nil {
-				continue
-			}
-			if chunk.Path == "" {
-				chunk.Path = path
-			}
-			allChunks = append(allChunks, chunk)
+			allIDs = append(allIDs, id)
+			idToPath[id] = path
+		}
+	}
+
+	allChunks, _ := st.GetByIDs(context.Background(), allIDs)
+	for i := range allChunks {
+		if allChunks[i].Path == "" {
+			allChunks[i].Path = idToPath[allChunks[i].ID]
 		}
 	}
 
@@ -319,7 +322,59 @@ func isUnderScope(path, scope string) bool {
 
 // Init initializes Bubble Tea sub-components.
 func (a *AppModel) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, a.checkBackgroundReconcileCmd())
+}
+
+type backgroundReconcileStartMsg struct{}
+type backgroundReconcileDoneMsg struct {
+	res *index.Result
+	err error
+}
+
+func (a *AppModel) checkBackgroundReconcileCmd() tea.Cmd {
+	return func() tea.Msg {
+		dataDir, err := config.ExpandPath(a.cfg.General.DataDir)
+		if err != nil {
+			return nil
+		}
+		m, err := index.LoadManifest(index.ManifestPath(dataDir))
+		if err != nil || m == nil || len(m.Roots) == 0 {
+			return nil
+		}
+		stale, err := m.IsStale(&a.cfg.Index)
+		if err != nil || !stale {
+			return nil
+		}
+		return backgroundReconcileStartMsg{}
+	}
+}
+
+func (a *AppModel) runBackgroundReconcileCmd() tea.Cmd {
+	return func() tea.Msg {
+		dataDir, err := config.ExpandPath(a.cfg.General.DataDir)
+		if err != nil {
+			return backgroundReconcileDoneMsg{err: err}
+		}
+		st, err := store.NewPersistentDB(index.StorePath(dataDir))
+		if err != nil {
+			return backgroundReconcileDoneMsg{err: err}
+		}
+		cli := ollama.NewClient(ollama.Options{
+			Host:         a.cfg.Ollama.Host,
+			EmbedTimeout: time.Duration(a.cfg.Ollama.Timeouts.EmbedBatchSeconds) * time.Second,
+		})
+		m, err := index.LoadManifest(index.ManifestPath(dataDir))
+		if err != nil || m == nil {
+			return backgroundReconcileDoneMsg{err: err}
+		}
+
+		engine := index.NewEngine(a.cfg, st, cli, dataDir)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		res, runErr := engine.Run(ctx, m.Roots, index.ModeSync)
+		return backgroundReconcileDoneMsg{res: res, err: runErr}
+	}
 }
 
 type searchCompleteMsg struct {
@@ -370,11 +425,31 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.input.Width = msg.Width - 6
 		return a, nil
 
+	case backgroundReconcileStartMsg:
+		st := a.getScopeState()
+		st.Reconciling = true
+		a.setScopeState(st)
+		return a, a.runBackgroundReconcileCmd()
+
+	case backgroundReconcileDoneMsg:
+		st := a.getScopeState()
+		st.Reconciling = false
+		a.setScopeState(st)
+		if msg.err == nil && msg.res != nil {
+			a.loadCorpus()
+			a.updateScope(a.scopePinned, a.getScopeState().Global)
+			if msg.res.Added > 0 || msg.res.Updated > 0 || msg.res.Removed > 0 {
+				a.sessionRefs.Clear()
+				a.refreshViewport()
+			}
+		}
+		return a, nil
+
 	case IndexProgressMsg:
 		cmd := a.indexer.Update(msg)
 		return a, cmd
 
-	case IndexTickMsg:
+	case spinner.TickMsg:
 		cmd := a.indexer.Update(msg)
 		return a, cmd
 
@@ -382,7 +457,11 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.indexer.Update(msg)
 		if msg.Err == nil {
 			a.loadCorpus()
-			a.updateScope(a.scopePinned, a.getScopeState().Global)
+			if a.scopePinned == "" && !a.getScopeState().Global {
+				a.updateScope(a.cwd, false)
+			} else {
+				a.updateScope(a.scopePinned, a.getScopeState().Global)
+			}
 			a.sessionRefs.Clear()
 		}
 		return a, cmd
@@ -401,7 +480,7 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			entry.WarningMsg = strings.Join(msg.Warnings, "\n")
 		}
 
-		a.history = append(a.history, entry)
+		a.appendHistory(entry)
 
 		// Record in session refs
 		if len(msg.Results) > 0 {
@@ -534,6 +613,13 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
+func (a *AppModel) appendHistory(entry ChatEntry) {
+	a.history = append(a.history, entry)
+	if len(a.history) > maxChatHistory {
+		a.history = a.history[len(a.history)-maxChatHistory:]
+	}
+}
+
 func (a *AppModel) refreshViewport() {
 	rendered := RenderChat(a.history, a.viewport.Width, a.theme)
 	a.viewport.SetContent(rendered)
@@ -543,7 +629,7 @@ func (a *AppModel) refreshViewport() {
 // handleSubmit routes colon commands, NL session refs, or new search queries.
 func (a *AppModel) handleSubmit(input string) tea.Cmd {
 	// Add user query to history
-	a.history = append(a.history, ChatEntry{
+	a.appendHistory(ChatEntry{
 		IsUser:    true,
 		Query:     input,
 		Timestamp: time.Now(),
@@ -586,6 +672,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			"  :scope <path>    Switch active search scope",
 			"  :global          Search across all indexed roots",
 			"  :index [dir]     Index or reindex directories",
+			"  :index-here      Index current directory ephemerally (transient)",
 			"  :sync            Sync and purge orphan chunks",
 			"  :status          Show active scope and chunk counts",
 			"  :clear           Clear query and chat history",
@@ -593,7 +680,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			"  :quit            Exit Vektix",
 		}, "\n")
 
-		a.history = append(a.history, ChatEntry{
+		a.appendHistory(ChatEntry{
 			IsUser:    false,
 			Notice:    helpText,
 			Timestamp: time.Now(),
@@ -608,7 +695,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		return nil
 
 	case ":status":
-		a.history = append(a.history, ChatEntry{
+		a.appendHistory(ChatEntry{
 			IsUser:    false,
 			Notice:    a.getScopeState().Banner(),
 			Timestamp: time.Now(),
@@ -618,7 +705,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 
 	case ":scope":
 		if len(parts) < 2 {
-			a.history = append(a.history, ChatEntry{
+			a.appendHistory(ChatEntry{
 				IsUser:    false,
 				Notice:    fmt.Sprintf("Current active scope: %s", a.getScopeState().Describe()),
 				Timestamp: time.Now(),
@@ -630,7 +717,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		if target == "global" || target == "-g" {
 			a.updateScope("", true)
 			a.sessionRefs.Clear()
-			a.history = append(a.history, ChatEntry{
+			a.appendHistory(ChatEntry{
 				IsUser:     false,
 				SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
 				Timestamp:  time.Now(),
@@ -642,7 +729,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			}
 			a.updateScope(exp, false)
 			a.sessionRefs.Clear()
-			a.history = append(a.history, ChatEntry{
+			a.appendHistory(ChatEntry{
 				IsUser:     false,
 				SuccessMsg: fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", a.getScopeState().Describe()),
 				Timestamp:  time.Now(),
@@ -654,7 +741,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 	case ":global":
 		a.updateScope("", true)
 		a.sessionRefs.Clear()
-		a.history = append(a.history, ChatEntry{
+		a.appendHistory(ChatEntry{
 			IsUser:     false,
 			SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
 			Timestamp:  time.Now(),
@@ -675,6 +762,10 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		a.mode = ModeIndexing
 		return a.indexer.Start(a.cfg, roots, index.ModeIndex)
 
+	case ":index-here", ":index-transient":
+		a.mode = ModeIndexing
+		return a.indexer.StartTransient(a.cfg, a.cwd)
+
 	case ":sync":
 		roots := a.cfg.Index.IndexDirs
 		a.mode = ModeIndexing
@@ -686,7 +777,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		return a.indexer.Start(a.cfg, roots, index.ModeReindex)
 
 	default:
-		a.history = append(a.history, ChatEntry{
+		a.appendHistory(ChatEntry{
 			IsUser:    false,
 			ErrorMsg:  fmt.Sprintf("unknown command: %s (type :help for available commands)", cmd),
 			Timestamp: time.Now(),
@@ -746,7 +837,7 @@ func (a *AppModel) handleSessionReferenceAction(input string) tea.Cmd {
 	if session.IsExplicitRef(lower) {
 		if item, idx, ok := a.sessionRefs.ResolveRef(lower); ok {
 			a.setActiveResultIndex(idx)
-			a.history = append(a.history, ChatEntry{
+			a.appendHistory(ChatEntry{
 				IsUser:     false,
 				SuccessMsg: fmt.Sprintf("✓ Selected match #%d: %s", idx+1, format.DisplayPath(item.Path)),
 				Timestamp:  time.Now(),
@@ -784,6 +875,16 @@ func (a *AppModel) executeIntent(query string) tea.Cmd {
 			}
 		}
 
+		scopeState := a.getScopeState()
+		scope := scopeState.Path
+
+		// Touch transient root if querying within it
+		if scope != "" && c.manifest.TouchPath(scope) {
+			if dataDir, err := config.ExpandPath(a.cfg.General.DataDir); err == nil {
+				_ = c.manifest.SaveManifest(index.ManifestPath(dataDir))
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -806,8 +907,6 @@ func (a *AppModel) executeIntent(query string) tea.Cmd {
 			}
 		}
 
-		scopeState := a.getScopeState()
-		scope := scopeState.Path
 		k := a.cfg.Search.MaxResults
 		if k <= 0 {
 			k = 8
@@ -1360,13 +1459,13 @@ func (a *AppModel) triggerExplainLatest() tea.Cmd {
 		modelName = "qwen2.5:3b-instruct"
 	}
 
-	entryIdx := len(a.history)
-	a.history = append(a.history, ChatEntry{
+	a.appendHistory(ChatEntry{
 		IsUser:         false,
 		ExplainLoading: true,
 		ExplainModel:   modelName,
 		Timestamp:      time.Now(),
 	})
+	entryIdx := len(a.history) - 1
 	a.refreshViewport()
 
 	return a.streamExplain(entryIdx, item, modelName)

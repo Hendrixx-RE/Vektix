@@ -101,3 +101,89 @@ func TestStore_EmptyAdd(t *testing.T) {
 		t.Fatalf("AddDocuments with empty slice failed: %v", err)
 	}
 }
+
+func TestChunk_TransientMetadata(t *testing.T) {
+	c := Chunk{
+		ID:        "doc-transient",
+		Path:      "/tmp/project/foo.go",
+		Content:   "func foo() {}",
+		Transient: true,
+		Locator: Locator{
+			Kind:   LocatorSymbol,
+			Start:  1,
+			End:    3,
+			Symbol: "func foo()",
+		},
+	}
+
+	meta := c.EncodeMetadata()
+	if meta["transient"] != "true" {
+		t.Errorf("expected transient='true', got %q", meta["transient"])
+	}
+
+	decoded, err := DecodeMetadata(meta)
+	if err != nil {
+		t.Fatalf("DecodeMetadata failed: %v", err)
+	}
+	if !decoded.Transient {
+		t.Errorf("expected decoded.Transient == true")
+	}
+	if decoded.Locator.Symbol != "func foo()" {
+		t.Errorf("expected symbol 'func foo()', got %q", decoded.Locator.Symbol)
+	}
+
+	cNonTransient := Chunk{
+		ID:        "doc-perm",
+		Path:      "/tmp/project/bar.go",
+		Transient: false,
+	}
+	metaNonTransient := cNonTransient.EncodeMetadata()
+	if _, ok := metaNonTransient["transient"]; ok {
+		t.Errorf("expected no 'transient' key for non-transient chunk, got %q", metaNonTransient["transient"])
+	}
+	decodedNonTransient, err := DecodeMetadata(metaNonTransient)
+	if err != nil {
+		t.Fatalf("DecodeMetadata failed: %v", err)
+	}
+	if decodedNonTransient.Transient {
+		t.Errorf("expected decodedNonTransient.Transient == false")
+	}
+}
+
+func TestStore_GetByIDs(t *testing.T) {
+	dir := t.TempDir()
+	st, err := NewPersistentDB(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chunks := []Chunk{
+		{ID: "c1", Content: "content 1", Path: "/a/1.go", Embedding: []float32{1.0, 0.0}},
+		{ID: "c2", Content: "content 2", Path: "/a/2.go", Embedding: []float32{0.0, 1.0}},
+		{ID: "c3", Content: "content 3", Path: "/a/3.go", Embedding: []float32{1.0, 1.0}},
+		{ID: "c4", Content: "content 4", Path: "/a/4.go", Embedding: []float32{0.5, 0.5}},
+	}
+
+	if err := st.AddDocuments(context.Background(), chunks); err != nil {
+		t.Fatalf("AddDocuments failed: %v", err)
+	}
+
+	// 1. Fetch subset with existing IDs and one missing ID
+	res, err := st.GetByIDs(context.Background(), []string{"c3", "c1", "missing", "c4"})
+	if err != nil {
+		t.Fatalf("GetByIDs failed: %v", err)
+	}
+
+	if len(res) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(res))
+	}
+	if res[0].ID != "c3" || res[1].ID != "c1" || res[2].ID != "c4" {
+		t.Errorf("unexpected order of chunks: %+v", res)
+	}
+
+	// 2. Fetch empty slice
+	emptyRes, err := st.GetByIDs(context.Background(), nil)
+	if err != nil || len(emptyRes) != 0 {
+		t.Errorf("expected empty result, got %v / %v", emptyRes, err)
+	}
+}

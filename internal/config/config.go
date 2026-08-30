@@ -45,11 +45,13 @@ type OllamaContext struct {
 }
 
 type IndexConfig struct {
-	IndexDirs       []string       `toml:"index_dirs"`
-	Extensions      []string       `toml:"extensions"`
-	MaxFileSizeMB   int            `toml:"max_file_size_mb"`
-	FollowSymlinks  bool           `toml:"follow_symlinks"`
-	Exclude         ExcludeConfig  `toml:"exclude"`
+	IndexDirs              []string      `toml:"index_dirs"`
+	Extensions             []string      `toml:"extensions"`
+	MaxFileSizeMB          int           `toml:"max_file_size_mb"`
+	FollowSymlinks         bool          `toml:"follow_symlinks"`
+	Exclude                ExcludeConfig `toml:"exclude"`
+	TransientRetentionDays int           `toml:"transient_retention_days"`
+	MaxTransientRoots      int           `toml:"max_transient_roots"`
 }
 
 type ExcludeConfig struct {
@@ -107,8 +109,10 @@ func DefaultConfig() Config {
 				".go", ".py", ".js", ".ts", ".rs", ".sh", ".c", ".java",
 				".json", ".yaml", ".yml", ".toml",
 			},
-			MaxFileSizeMB:  50,
-			FollowSymlinks: false,
+			MaxFileSizeMB:          50,
+			FollowSymlinks:         false,
+			TransientRetentionDays: 7,
+			MaxTransientRoots:      10,
 			Exclude: ExcludeConfig{
 				Dirs: []string{
 					"node_modules", ".git", "__pycache__", ".venv", "venv", ".cache",
