@@ -268,30 +268,6 @@ func (e *env) loadCorpus() (*corpus, error) {
 	c.vector = resolve.NewVectorArm(db, client, ollama.NewEmbeddingCache(queryCacheSize), m,
 		e.cfg.Ollama.EmbeddingModel, e.cfg.Ollama.KeepAlive, e.cfg.Search.OversampleFloor)
 
-	// Background reconcile on startup: if on-disk manifest is stale, kick off a
-	// background reconcile pass in a fire-and-forget goroutine without blocking
-	// the current command's results.
-	go func() {
-		if m == nil || len(m.Roots) == 0 {
-			return
-		}
-		if stale, _ := m.IsStale(&e.cfg.Index); !stale {
-			return
-		}
-		st, err := store.NewPersistentDB(index.StorePath(e.dataDir))
-		if err != nil {
-			return
-		}
-		cli := ollama.NewClient(ollama.Options{
-			Host:         e.cfg.Ollama.Host,
-			EmbedTimeout: time.Duration(e.cfg.Ollama.Timeouts.EmbedBatchSeconds) * time.Second,
-		})
-		engine := index.NewEngine(e.cfg, st, cli, e.dataDir)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		_, _ = engine.Run(ctx, m.Roots, index.ModeSync)
-	}()
-
 	return c, nil
 }
 
