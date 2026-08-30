@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 	"github.com/Hendrixx-RE/Vektix/internal/router"
 )
 
@@ -51,7 +52,7 @@ func (m IntentMetrics) String() string {
 	sb.WriteString(fmt.Sprintf("# intent action accuracy       %4.1f%%\n", m.ActionAccuracy))
 	sb.WriteString(fmt.Sprintf("# intent parameter accuracy    %4.1f%%\n", m.ParamAccuracy))
 	sb.WriteString(fmt.Sprintf("# tier 1 fastpath rate         %4.1f%%\n", m.Tier1Rate))
-	sb.WriteString(fmt.Sprintf("# latency p50 %v   p95 %v\n", formatDuration(m.P50Latency), formatDuration(m.P95Latency)))
+	sb.WriteString(fmt.Sprintf("# latency p50 %v   p95 %v\n", format.FormatDuration(m.P50Latency), format.FormatDuration(m.P95Latency)))
 	return sb.String()
 }
 
@@ -180,7 +181,7 @@ func (m LocateMetrics) String() string {
 	sb.WriteString(fmt.Sprintf("# scoped recall@1   %4.1f%%   scoped recall@3   %4.1f%%   (%+.1f / %+.1f)\n",
 		m.ScopedRecallAt1, m.ScopedRecallAt3, m.ScopedDeltaAt1, m.ScopedDeltaAt3))
 	sb.WriteString(fmt.Sprintf("# ablation: bm25 %4.1f  vector %4.1f  rrf %4.1f\n", m.BM25Recall, m.VectorRecall, m.RRFRecall))
-	sb.WriteString(fmt.Sprintf("# latency p50 %v   p95 %v\n", formatDuration(m.P50Latency), formatDuration(m.P95Latency)))
+	sb.WriteString(fmt.Sprintf("# latency p50 %v   p95 %v\n", format.FormatDuration(m.P50Latency), format.FormatDuration(m.P95Latency)))
 	if m.HasExcerptCases {
 		sb.WriteString(fmt.Sprintf("# excerpt correctness  %4.1f%%\n", m.ExcerptAccuracy))
 	}
@@ -322,14 +323,4 @@ func ComputePercentile(durations []time.Duration, p float64) time.Duration {
 		idx = len(sorted) - 1
 	}
 	return sorted[idx]
-}
-
-func formatDuration(d time.Duration) string {
-	if d < time.Millisecond {
-		return fmt.Sprintf("%dµs", d.Microseconds())
-	}
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	return fmt.Sprintf("%.2fs", d.Seconds())
 }

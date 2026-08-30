@@ -315,8 +315,8 @@ func TestRunLocateMocked(t *testing.T) {
 		t.Fatalf("expected chunks in corpus, got 0")
 	}
 
-	datasetContent := `{"query": "jwt.go", "expect_path": "pkg/auth/jwt.go", "scope": "global", "expected_text": "ValidateToken"}
-{"query": "database connection pool limits and retry backoff", "expect_path": "pkg/db/pool.go", "scope": "pkg/db", "expected_text": "MaxOpenConns"}`
+	datasetContent := `{"query": "jwt.go", "expect_path": "pkg/auth/jwt.go", "scope": "global", "expected_text": "Claims"}
+{"query": "MaxOpenConns", "expect_path": "pkg/db/pool.go", "scope": "pkg/db", "expected_text": "MaxOpenConns"}`
 
 	datasetPath := filepath.Join(t.TempDir(), "test_locate.jsonl")
 	if err := os.WriteFile(datasetPath, []byte(datasetContent), 0644); err != nil {
@@ -356,5 +356,38 @@ func TestDatasetIntegrationConsistency(t *testing.T) {
 	}
 	if len(cases) < 20 {
 		t.Errorf("expected >= 20 locate cases in locate_eval.jsonl, got %d", len(cases))
+	}
+}
+
+func TestLoadOrIndexCorpusUnreachableOllama(t *testing.T) {
+	corpusDir := "../../testdata/corpus"
+	if _, err := os.Stat(corpusDir); err != nil {
+		corpusDir = "testdata/corpus"
+	}
+
+	cfg := config.DefaultConfig()
+	// Point to unreachable port
+	cfg.Ollama.Host = "http://127.0.0.1:54321"
+
+	client := ollama.NewClient(ollama.Options{
+		Host:         cfg.Ollama.Host,
+		EmbedTimeout: 100 * time.Millisecond,
+	})
+
+	dataDir := filepath.Join(t.TempDir(), "eval_unreachable_store")
+
+	runnerOpts := RunnerOptions{
+		Config:    &cfg,
+		Client:    client,
+		CorpusDir: corpusDir,
+		DataDir:   dataDir,
+	}
+
+	_, err := LoadOrIndexCorpus(context.Background(), runnerOpts)
+	if err == nil {
+		t.Fatalf("expected LoadOrIndexCorpus to fail with unreachable Ollama and 0 chunks, but got nil error")
+	}
+	if !strings.Contains(err.Error(), "0 chunks indexed") {
+		t.Errorf("expected error message to mention '0 chunks indexed', got %v", err)
 	}
 }

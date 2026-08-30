@@ -154,18 +154,19 @@ func LoadOrIndexCorpus(ctx context.Context, opts RunnerOptions) (*CorpusIndex, e
 
 	manifestPath := index.ManifestPath(dataDir)
 	engine := index.NewEngine(cfg, db, client, dataDir)
-	_, err = engine.Run(ctx, []string{absCorpusDir}, index.ModeSync)
-	if err != nil {
+	_, runErr := engine.Run(ctx, []string{absCorpusDir}, index.ModeSync)
+	if runErr != nil {
 		var invalid *index.InvalidIndexError
-		if errors.As(err, &invalid) {
-			return nil, err
-		}
-		if _, statErr := os.Stat(manifestPath); statErr != nil {
-			return nil, fmt.Errorf("indexing evaluation corpus at %s: %w", absCorpusDir, err)
+		if errors.As(runErr, &invalid) {
+			return nil, runErr
 		}
 	}
+
 	m, err := index.LoadManifest(manifestPath)
 	if err != nil {
+		if runErr != nil {
+			return nil, fmt.Errorf("indexing evaluation corpus at %s failed: %w", absCorpusDir, runErr)
+		}
 		return nil, fmt.Errorf("loading manifest from %s: %w", manifestPath, err)
 	}
 
@@ -188,6 +189,19 @@ func LoadOrIndexCorpus(ctx context.Context, opts RunnerOptions) (*CorpusIndex, e
 			}
 			chunks = append(chunks, chunk)
 		}
+	}
+
+	if len(chunks) == 0 {
+		if runErr != nil {
+			return nil, fmt.Errorf("indexing evaluation corpus at %s failed: %w (0 chunks indexed; ensure Ollama is running with %s at %s)",
+				absCorpusDir, runErr, cfg.Ollama.EmbeddingModel, cfg.Ollama.Host)
+		}
+		return nil, fmt.Errorf("evaluation corpus at %s contains 0 indexed chunks", absCorpusDir)
+	}
+
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: indexing evaluation corpus at %s encountered an error: %v (evaluating against partial index of %d files, %d chunks)\n",
+			absCorpusDir, runErr, len(m.Files), len(chunks))
 	}
 
 	pathIndex := resolve.NewPathIndex(chunks)

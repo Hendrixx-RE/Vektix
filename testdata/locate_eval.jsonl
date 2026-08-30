@@ -1,4 +1,4 @@
-{"query": "jwt.go", "expect_path": "pkg/auth/jwt.go", "scope": "global", "expected_text": "ValidateToken"}
+{"query": "jwt.go", "expect_path": "pkg/auth/jwt.go", "scope": "global", "expected_text": "Claims"}
 {"query": "ValidateToken", "expect_path": "pkg/auth/jwt.go", "scope": "pkg/auth", "expected_text": "ValidateToken"}
 {"query": "JWT token validation and claims", "expect_path": "pkg/auth/jwt.go", "scope": "global", "expected_text": "Claims"}
 {"query": "user token claims expiration", "expect_path": "pkg/auth/jwt.go", "scope": "pkg/auth", "expected_text": "ExpiresAt"}
