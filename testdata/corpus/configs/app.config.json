@@ -1,0 +1,16 @@
+{
+  "server": {
+    "port": 8080,
+    "read_timeout_seconds": 15,
+    "write_timeout_seconds": 30,
+    "max_header_bytes": 1048576
+  },
+  "logging": {
+    "level": "info",
+    "format": "json"
+  },
+  "rate_limit": {
+    "requests_per_minute": 120,
+    "burst": 30
+  }
+}

@@ -1,0 +1,11 @@
+Changelog
+
+v1.1.0 (2026-06-15)
+- Added exponential retry backoff in connection pool.
+- Optimized LRU cache eviction speed by 40%.
+- Fixed dead letter queue dropped task bug.
+
+v1.0.0 (2026-01-10)
+- Initial release of core microservices platform.
+- Full JWT authentication integration.
+- Prometheus metrics collector export endpoint.

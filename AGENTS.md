@@ -86,9 +86,10 @@ internal/
     text.go               Line-numbered plain text/markdown parsing.
     pdf.go               ledongthuc/pdf, isolated in a goroutine with recover() and context-
                          aware cancellation — a malformed PDF must never abort a run.
-  session/refs.go         Session result tracking + ordinal/pronoun reference resolution.
-  eval/{runner,metrics}.go   Empty stubs. The real interim intent-eval tool is
-                         scripts/eval_intent.go (see README's Development tooling).
+  eval/
+    metrics.go          Metric types and calculations (accuracy, recall@1/3, scoped deltas, ablations, p50/p95, excerpt check).
+    runner.go           Evaluation runner orchestrating intent classification and locate retrieval against fixture corpus.
+    eval_test.go        Unit tests for eval harness with mocked Ollama endpoints.
   tui/
     app.go                Root Bubble Tea model (Init/Update/View), query loop, keybinds.
     chat.go               Query and result view rendering, action bar, explain blocks.
@@ -99,7 +100,10 @@ internal/
 scripts/                 Dev-only tooling, not part of the vektix binary. gen_cases.py
                          generates testdata/intent_eval.jsonl; eval_intent.go runs it against
                          a live Ollama.
-testdata/intent_eval.jsonl   157 cases, only 19 tier-1. No locate_eval.jsonl or corpus/ yet.
+testdata/
+  corpus/                Deterministic multi-file fixture corpus for retrieval benchmarks (.go, .md, .txt, .json).
+  intent_eval.jsonl      Intent evaluation dataset.
+  locate_eval.jsonl      Locate retrieval evaluation dataset (global and scoped queries).
 ```
 
 ## Hard rules
