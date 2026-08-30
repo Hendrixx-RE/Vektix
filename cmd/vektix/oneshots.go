@@ -354,7 +354,7 @@ func (e *env) resolveActiveScope(fl *oneShotFlags) *activeScope {
 	} else if res.RequiresPrompt && fl.scope == "" {
 		if fl.indexNow {
 			if !fl.jsonOut {
-				fmt.Fprintf(e.stderr, "indexing %s ephemerally (transient)...\n", displayPath(e.cwd))
+				fmt.Fprintf(e.stderr, "indexing %s ephemerally (transient)...\n", format.DisplayPath(e.cwd))
 			}
 			e.indexEphemeralSubtree(e.cwd)
 			e.corpusDone = false
