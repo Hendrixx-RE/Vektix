@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/resolve"
 	"github.com/Hendrixx-RE/Vektix/internal/router"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -259,10 +261,7 @@ func TestApp_IndexProgressAndAnimation(t *testing.T) {
 	}
 
 	// Spinner tick arrives
-	app.Update(IndexTickMsg{})
-	if app.indexer.SpinnerIndex != 1 {
-		t.Errorf("expected spinnerIndex 1 after tick, got %d", app.indexer.SpinnerIndex)
-	}
+	app.Update(spinner.TickMsg{Time: time.Now()})
 
 	// Done message arrives
 	app.Update(IndexDoneMsg{
@@ -273,6 +272,30 @@ func TestApp_IndexProgressAndAnimation(t *testing.T) {
 	})
 	if app.indexer.Running {
 		t.Errorf("expected indexer running = false after IndexDoneMsg")
+	}
+}
+
+func TestApp_HistoryCap(t *testing.T) {
+	app, _, _ := newTestApp(t)
+
+	// Add 250 entries to history
+	for i := 0; i < 250; i++ {
+		app.appendHistory(ChatEntry{
+			IsUser:    true,
+			Query:     fmt.Sprintf("query %d", i),
+			Timestamp: time.Now(),
+		})
+	}
+
+	if len(app.history) != maxChatHistory {
+		t.Fatalf("expected history capped at %d, got %d", maxChatHistory, len(app.history))
+	}
+	// Oldest entries (0..49) should have been trimmed; first entry should be query 50
+	if app.history[0].Query != "query 50" {
+		t.Errorf("expected oldest remaining entry to be 'query 50', got %q", app.history[0].Query)
+	}
+	if app.history[len(app.history)-1].Query != "query 249" {
+		t.Errorf("expected newest entry to be 'query 249', got %q", app.history[len(app.history)-1].Query)
 	}
 }
 

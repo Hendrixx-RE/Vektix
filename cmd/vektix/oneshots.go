@@ -238,20 +238,23 @@ func (e *env) loadCorpus() (*corpus, error) {
 	}
 	sort.Strings(files)
 
-	ctx := context.Background()
+	var allIDs []string
+	idToPath := make(map[string]string)
 	for _, path := range files {
 		for _, id := range m.Files[path].Chunks {
-			chunk, err := db.GetByID(ctx, id)
-			if err != nil {
-				c.missing++
-				continue
-			}
-			if chunk.Path == "" {
-				chunk.Path = path
-			}
-			c.chunks = append(c.chunks, chunk)
+			allIDs = append(allIDs, id)
+			idToPath[id] = path
 		}
 	}
+
+	chunks, _ := db.GetByIDs(context.Background(), allIDs)
+	for i := range chunks {
+		if chunks[i].Path == "" {
+			chunks[i].Path = idToPath[chunks[i].ID]
+		}
+	}
+	c.chunks = chunks
+	c.missing = len(allIDs) - len(chunks)
 
 	c.paths = resolve.NewPathIndex(c.chunks)
 	c.bm25 = resolve.NewBM25Index(c.chunks)

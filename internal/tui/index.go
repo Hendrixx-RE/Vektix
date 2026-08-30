@@ -12,18 +12,14 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // IndexProgressMsg conveys incremental progress from the index pipeline.
 type IndexProgressMsg struct {
 	Progress index.Progress
 }
-
-// IndexTickMsg advances the progress spinner animation.
-type IndexTickMsg struct{}
 
 // IndexDoneMsg marks the completion of an indexing or sync run.
 type IndexDoneMsg struct {
@@ -34,30 +30,27 @@ type IndexDoneMsg struct {
 
 // IndexModel manages the interactive progress display during indexing/syncing.
 type IndexModel struct {
-	Running      bool
-	Mode         index.Mode
-	Roots        []string
-	Progress     index.Progress
-	Result       *index.Result
-	Err          error
-	StartTime    time.Time
-	Elapsed      time.Duration
-	SpinnerIndex int
-	CancelFn     context.CancelFunc
-	progChan     chan index.Progress
+	Running   bool
+	Mode      index.Mode
+	Roots     []string
+	Progress  index.Progress
+	Result    *index.Result
+	Err       error
+	StartTime time.Time
+	Elapsed   time.Duration
+	Spinner   spinner.Model
+	CancelFn  context.CancelFunc
+	progChan  chan index.Progress
 }
 
-// NewIndexModel returns an idle IndexModel.
+// NewIndexModel returns an idle IndexModel with initialized bubbles spinner.
 func NewIndexModel() IndexModel {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
 	return IndexModel{
 		Running: false,
+		Spinner: s,
 	}
-}
-
-func tickSpinnerCmd() tea.Cmd {
-	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
-		return IndexTickMsg{}
-	})
 }
 
 func listenProgress(ch <-chan index.Progress) tea.Cmd {
@@ -93,7 +86,8 @@ func (m *IndexModel) startWithOptions(cfg *config.Config, roots []string, mode i
 	startTime := time.Now()
 	m.StartTime = startTime
 	m.Elapsed = 0
-	m.SpinnerIndex = 0
+	m.Spinner = spinner.New()
+	m.Spinner.Spinner = spinner.Dot
 	m.progChan = make(chan index.Progress, 128)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,7 +136,7 @@ func (m *IndexModel) startWithOptions(cfg *config.Config, roots []string, mode i
 		}
 	}
 
-	return tea.Batch(runCmd, listenProgress(ch), tickSpinnerCmd())
+	return tea.Batch(runCmd, listenProgress(ch), m.Spinner.Tick)
 }
 
 // Update processes index-related events and keypresses.
@@ -155,11 +149,12 @@ func (m *IndexModel) Update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 
-	case IndexTickMsg:
+	case spinner.TickMsg:
 		if m.Running {
-			m.SpinnerIndex++
+			var cmd tea.Cmd
+			m.Spinner, cmd = m.Spinner.Update(msg)
 			m.Elapsed = time.Since(m.StartTime)
-			return tickSpinnerCmd()
+			return cmd
 		}
 		return nil
 
@@ -199,8 +194,7 @@ func (m IndexModel) View(width int, theme Theme) string {
 	}
 
 	if m.Running {
-		spinner := spinnerFrames[m.SpinnerIndex%len(spinnerFrames)]
-		title := fmt.Sprintf("%s %s in progress...", spinner, modeName)
+		title := fmt.Sprintf("%s %s in progress...", m.Spinner.View(), modeName)
 		rows = append(rows, theme.IndexTitle.Render(title))
 		rows = append(rows, "")
 
