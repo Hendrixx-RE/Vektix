@@ -2,46 +2,172 @@
 {"input": "open /etc/hosts", "expected": {"action": "open", "path": "/etc/hosts"}, "tier": 1}
 {"input": "open src/config.json", "expected": {"action": "open", "path": "src/config.json"}, "tier": 1}
 {"input": "open README.md", "expected": {"action": "open", "path": "README.md"}, "tier": 1}
+{"input": "open docs/architecture.pdf", "expected": {"action": "open", "path": "docs/architecture.pdf"}, "tier": 1}
+{"input": "open internal/router/fastpath.go", "expected": {"action": "open", "path": "internal/router/fastpath.go"}, "tier": 1}
+{"input": "open Makefile", "expected": {"action": "open", "path": "Makefile"}, "tier": 1}
+{"input": "open ./deploy/docker-compose.yml", "expected": {"action": "open", "path": "./deploy/docker-compose.yml"}, "tier": 1}
+{"input": "open scripts/build.sh", "expected": {"action": "open", "path": "scripts/build.sh"}, "tier": 1}
 {"input": "read server.go", "expected": {"action": "read", "path": "server.go"}, "tier": 1}
+{"input": "read internal/store/store.go", "expected": {"action": "read", "path": "internal/store/store.go"}, "tier": 1}
+{"input": "read deploy/docker-compose.yml", "expected": {"action": "read", "path": "deploy/docker-compose.yml"}, "tier": 1}
+{"input": "read pkg/client.rs", "expected": {"action": "read", "path": "pkg/client.rs"}, "tier": 1}
+{"input": "read docs/manual.txt", "expected": {"action": "read", "path": "docs/manual.txt"}, "tier": 1}
 {"input": "show logs/app.log", "expected": {"action": "read", "path": "logs/app.log"}, "tier": 1}
+{"input": "show config.yaml", "expected": {"action": "read", "path": "config.yaml"}, "tier": 1}
+{"input": "show internal/session/refs.go", "expected": {"action": "read", "path": "internal/session/refs.go"}, "tier": 1}
+{"input": "show schema.sql", "expected": {"action": "read", "path": "schema.sql"}, "tier": 1}
+{"input": "show testdata/intent_eval.jsonl", "expected": {"action": "read", "path": "testdata/intent_eval.jsonl"}, "tier": 1}
 {"input": "cat internal/util.go", "expected": {"action": "read", "path": "internal/util.go"}, "tier": 1}
+{"input": "cat /var/log/syslog", "expected": {"action": "read", "path": "/var/log/syslog"}, "tier": 1}
+{"input": "cat scripts/build.sh", "expected": {"action": "read", "path": "scripts/build.sh"}, "tier": 1}
+{"input": "cat Cargo.toml", "expected": {"action": "read", "path": "Cargo.toml"}, "tier": 1}
+{"input": "cat /etc/resolv.conf", "expected": {"action": "read", "path": "/etc/resolv.conf"}, "tier": 1}
+{"input": "ls /usr", "expected": {"action": "list", "path": "/usr"}, "tier": 1}
+{"input": "ls /var/log", "expected": {"action": "list", "path": "/var/log"}, "tier": 1}
+{"input": "ls testdata/", "expected": {"action": "list", "path": "testdata/"}, "tier": 1}
+{"input": "ls internal/router", "expected": {"action": "list", "path": "internal/router"}, "tier": 1}
+{"input": "ls ./scripts", "expected": {"action": "list", "path": "./scripts"}, "tier": 1}
+{"input": "ls /usr/local/bin", "expected": {"action": "list", "path": "/usr/local/bin"}, "tier": 1}
+{"input": "list ~/.config", "expected": {"action": "list", "path": "~/.config"}, "tier": 1}
+{"input": "list src/components", "expected": {"action": "list", "path": "src/components"}, "tier": 1}
+{"input": "list /etc/nginx/conf.d", "expected": {"action": "list", "path": "/etc/nginx/conf.d"}, "tier": 1}
+{"input": "list internal/store", "expected": {"action": "list", "path": "internal/store"}, "tier": 1}
+{"input": "list pkg/models", "expected": {"action": "list", "path": "pkg/models"}, "tier": 1}
+{"input": "head 30 main.go", "expected": {"action": "read", "path": "main.go", "lines": "30"}, "tier": 1}
 {"input": "head 30 README.md", "expected": {"action": "read", "path": "README.md", "lines": "30"}, "tier": 1}
+{"input": "head 50 internal/session/refs.go", "expected": {"action": "read", "path": "internal/session/refs.go", "lines": "50"}, "tier": 1}
+{"input": "head -20 log.txt", "expected": {"action": "read", "path": "log.txt", "lines": "-20"}, "tier": 1}
+{"input": "head 15 cmd/vektix/main.go", "expected": {"action": "read", "path": "cmd/vektix/main.go", "lines": "15"}, "tier": 1}
+{"input": "head 100 data/schema.json", "expected": {"action": "read", "path": "data/schema.json", "lines": "100"}, "tier": 1}
+{"input": "head -5 /var/log/syslog", "expected": {"action": "read", "path": "/var/log/syslog", "lines": "-5"}, "tier": 1}
+{"input": "tail -100 main.go", "expected": {"action": "read", "path": "main.go", "lines": "-100"}, "tier": 1}
 {"input": "tail -50 temp.txt", "expected": {"action": "read", "path": "temp.txt", "lines": "-50"}, "tier": 1}
+{"input": "tail 25 /var/log/nginx.log", "expected": {"action": "read", "path": "/var/log/nginx.log", "lines": "25"}, "tier": 1}
+{"input": "tail 40 output.log", "expected": {"action": "read", "path": "output.log", "lines": "40"}, "tier": 1}
+{"input": "tail -10 .env", "expected": {"action": "read", "path": ".env", "lines": "-10"}, "tier": 1}
+{"input": "tail 15 internal/config/config.go", "expected": {"action": "read", "path": "internal/config/config.go", "lines": "15"}, "tier": 1}
 {"input": "find *.go", "expected": {"action": "locate", "query": "*.go"}, "tier": 1}
 {"input": "find src/*.ts", "expected": {"action": "locate", "query": "src/*.ts"}, "tier": 1}
 {"input": "find ?est.go", "expected": {"action": "locate", "query": "?est.go"}, "tier": 1}
-{"input": "copy it", "expected": {"action": "copy", "path": "it"}, "tier": 1}
-{"input": "copy #2", "expected": {"action": "copy", "path": "#2"}, "tier": 1}
-{"input": "copy the first one", "expected": {"action": "copy", "path": "the first one"}, "tier": 1}
+{"input": "find [a-z]*.py", "expected": {"action": "locate", "query": "[a-z]*.py"}, "tier": 1}
+{"input": "find internal/**/*.go", "expected": {"action": "locate", "query": "internal/**/*.go"}, "tier": 1}
+{"input": "find config.toml", "expected": {"action": "locate", "query": "config.toml"}, "tier": 1}
+{"input": "find Makefile", "expected": {"action": "locate", "query": "Makefile"}, "tier": 1}
+{"input": "find Dockerfile", "expected": {"action": "locate", "query": "Dockerfile"}, "tier": 1}
+{"input": "find /var/log/*.log", "expected": {"action": "locate", "query": "/var/log/*.log"}, "tier": 1}
 {"input": "copy config.yaml", "expected": {"action": "copy", "path": "config.yaml"}, "tier": 1}
-{"input": "ls /var/log", "expected": {"action": "list", "path": "/var/log"}, "tier": 1}
-{"input": "list ~/.config", "expected": {"action": "list", "path": "~/.config"}, "tier": 1}
-{"input": "ls testdata/", "expected": {"action": "list", "path": "testdata/"}, "tier": 1}
+{"input": "copy src/utils.ts", "expected": {"action": "copy", "path": "src/utils.ts"}, "tier": 1}
+{"input": "copy internal/router/fastpath.go", "expected": {"action": "copy", "path": "internal/router/fastpath.go"}, "tier": 1}
+{"input": "copy /etc/hosts", "expected": {"action": "copy", "path": "/etc/hosts"}, "tier": 1}
+{"input": "copy README.md", "expected": {"action": "copy", "path": "README.md"}, "tier": 1}
+{"input": "copy it", "expected": {"action": "copy", "path": "it"}, "tier": 1}
+{"input": "copy that", "expected": {"action": "copy", "path": "that"}, "tier": 1}
+{"input": "copy this", "expected": {"action": "copy", "path": "this"}, "tier": 1}
+{"input": "copy #2", "expected": {"action": "copy", "path": "#2"}, "tier": 1}
+{"input": "copy #15", "expected": {"action": "copy", "path": "#15"}, "tier": 1}
+{"input": "copy 2nd", "expected": {"action": "copy", "path": "2nd"}, "tier": 1}
+{"input": "copy 3rd", "expected": {"action": "copy", "path": "3rd"}, "tier": 1}
+{"input": "copy the first one", "expected": {"action": "copy", "path": "the first one"}, "tier": 1}
+{"input": "copy the second one", "expected": {"action": "copy", "path": "the second one"}, "tier": 1}
+{"input": "copy the third one", "expected": {"action": "copy", "path": "the third one"}, "tier": 1}
+{"input": "copy the fourth one", "expected": {"action": "copy", "path": "the fourth one"}, "tier": 1}
+{"input": "copy the 4th one", "expected": {"action": "copy", "path": "the 4th one"}, "tier": 1}
+{"input": "copy the fifth one", "expected": {"action": "copy", "path": "the fifth one"}, "tier": 1}
+{"input": "copy the last one", "expected": {"action": "copy", "path": "the last one"}, "tier": 1}
+{"input": "copy that pdf", "expected": {"action": "copy", "path": "that pdf"}, "tier": 1}
+{"input": "copy the go file", "expected": {"action": "copy", "path": "the go file"}, "tier": 1}
+{"input": "copy this code", "expected": {"action": "copy", "path": "this code"}, "tier": 1}
+{"input": "copy that document", "expected": {"action": "copy", "path": "that document"}, "tier": 1}
+{"input": "copy the excerpt", "expected": {"action": "copy", "path": "the excerpt"}, "tier": 1}
+{"input": "copy the result", "expected": {"action": "copy", "path": "the result"}, "tier": 1}
+{"input": "copy the file", "expected": {"action": "copy", "path": "the file"}, "tier": 1}
+{"input": "copy the match", "expected": {"action": "copy", "path": "the match"}, "tier": 1}
 {"input": "keep an open mind about the architecture", "expected": {"action": "excerpt", "query": "architecture"}, "tier": 2}
 {"input": "when did the store open for business", "expected": {"action": "excerpt", "query": "store open"}, "tier": 2}
+{"input": "open the pod bay doors hal", "expected": {"action": "excerpt", "query": "pod bay doors hal"}, "tier": 2}
+{"input": "open a new issue about the database crash", "expected": {"action": "excerpt", "query": "database crash issue"}, "tier": 2}
+{"input": "open up the discussion on pull requests", "expected": {"action": "excerpt", "query": "discussion pull requests"}, "tier": 2}
+{"input": "open sesame and show all secrets", "expected": {"action": "excerpt", "query": "secrets"}, "tier": 2}
+{"input": "open questions from yesterday meeting", "expected": {"action": "excerpt", "query": "meeting questions"}, "tier": 2}
+{"input": "open your mind to modern backend design", "expected": {"action": "excerpt", "query": "backend design"}, "tier": 2}
+{"input": "open up ticket 123 for discussion", "expected": {"action": "excerpt", "query": "ticket 123"}, "tier": 2}
 {"input": "I need to read between the lines on this PR", "expected": {"action": "excerpt", "query": "PR"}, "tier": 2}
 {"input": "did anyone read the memo about postgres", "expected": {"action": "excerpt", "query": "postgres memo"}, "tier": 2}
+{"input": "read between the lines on this PR", "expected": {"action": "excerpt", "query": "PR"}, "tier": 2}
+{"input": "read me the latest deployment error", "expected": {"action": "read", "query": "deployment error"}, "tier": 2}
+{"input": "read the memo about postgres migration", "expected": {"action": "read", "query": "postgres migration memo"}, "tier": 2}
+{"input": "read through the comments on ticket 404", "expected": {"action": "read", "query": "comments ticket 404"}, "tier": 2}
+{"input": "read aloud the summary of the meeting", "expected": {"action": "read", "query": "meeting summary"}, "tier": 2}
+{"input": "read all about our release plans", "expected": {"action": "excerpt", "query": "release plans"}, "tier": 2}
 {"input": "show me what's in the docker file", "expected": {"action": "read", "query": "docker"}, "tier": 2}
 {"input": "can you show us the connection string", "expected": {"action": "excerpt", "query": "connection string"}, "tier": 2}
+{"input": "show us how to reproduce the bug", "expected": {"action": "excerpt", "query": "reproduce bug"}, "tier": 2}
+{"input": "show the team the latest benchmark results", "expected": {"action": "read", "query": "benchmark results"}, "tier": 2}
+{"input": "show some examples of error handling", "expected": {"action": "excerpt", "query": "error handling examples"}, "tier": 2}
+{"input": "show all details regarding the outage", "expected": {"action": "excerpt", "query": "outage details"}, "tier": 2}
+{"input": "show how the authentication flow works", "expected": {"action": "excerpt", "query": "authentication flow"}, "tier": 2}
 {"input": "my cat is sitting on my keyboard", "expected": {"action": "locate", "query": "cat keyboard"}, "tier": 2}
 {"input": "cat videos are distracting me from the bug", "expected": {"action": "locate", "query": "cat videos bug"}, "tier": 2}
+{"input": "cat photos are stored in the cloud", "expected": {"action": "locate", "query": "cat photos cloud"}, "tier": 2}
+{"input": "cat got your tongue during the standup", "expected": {"action": "excerpt", "query": "standup"}, "tier": 2}
+{"input": "cat food receipt from last week", "expected": {"action": "locate", "query": "cat food receipt"}, "tier": 2}
+{"input": "cat is not my favorite animal", "expected": {"action": "excerpt", "query": "favorite animal"}, "tier": 2}
+{"input": "cat and dog adoption guidelines", "expected": {"action": "locate", "query": "adoption guidelines"}, "tier": 2}
 {"input": "is there any ls alias for kubernetes", "expected": {"action": "excerpt", "query": "kubernetes ls alias"}, "tier": 2}
+{"input": "ls alias for kubernetes cluster", "expected": {"action": "excerpt", "query": "kubernetes cluster ls alias"}, "tier": 2}
+{"input": "ls command options in bash", "expected": {"action": "excerpt", "query": "bash ls command options"}, "tier": 2}
+{"input": "ls flags for sorting by time", "expected": {"action": "excerpt", "query": "ls flags sorting time"}, "tier": 2}
+{"input": "ls output formatting with colors", "expected": {"action": "excerpt", "query": "ls output formatting colors"}, "tier": 2}
+{"input": "ls tricks for searching directories", "expected": {"action": "excerpt", "query": "ls searching directories"}, "tier": 2}
 {"input": "what's the list of dependencies for this project", "expected": {"action": "excerpt", "query": "project dependencies"}, "tier": 2}
 {"input": "list out the top reasons for adopting rust", "expected": {"action": "excerpt", "query": "reasons adopting rust"}, "tier": 2}
+{"input": "list all active database connections", "expected": {"action": "excerpt", "query": "active database connections"}, "tier": 2}
+{"input": "list every contributor to the repository", "expected": {"action": "excerpt", "query": "repository contributors"}, "tier": 2}
+{"input": "list things we need to fix before release", "expected": {"action": "excerpt", "query": "fix before release"}, "tier": 2}
+{"input": "list reasons why the query failed", "expected": {"action": "excerpt", "query": "query failed reasons"}, "tier": 2}
 {"input": "head straight to the database section", "expected": {"action": "excerpt", "query": "database"}, "tier": 2}
 {"input": "what is the head of the marketing department", "expected": {"action": "excerpt", "query": "head marketing department"}, "tier": 2}
+{"input": "head over to the settings page", "expected": {"action": "excerpt", "query": "settings page"}, "tier": 2}
+{"input": "head first into the codebase refactor", "expected": {"action": "excerpt", "query": "codebase refactor"}, "tier": 2}
+{"input": "head 10 reasons why we use go", "expected": {"action": "excerpt", "query": "reasons why we use go"}, "tier": 2}
+{"input": "head -5 steps to reproduce the issue", "expected": {"action": "excerpt", "query": "steps to reproduce issue"}, "tier": 2}
+{"input": "head 20 tips for writing clean code", "expected": {"action": "excerpt", "query": "tips writing clean code"}, "tier": 2}
+{"input": "head 5 items on the roadmap", "expected": {"action": "excerpt", "query": "roadmap items"}, "tier": 2}
+{"input": "head 100 ways to optimize database queries", "expected": {"action": "excerpt", "query": "optimize database queries"}, "tier": 2}
 {"input": "tail end of the meeting notes from yesterday", "expected": {"action": "read", "query": "meeting notes yesterday"}, "tier": 2}
+{"input": "tail call optimization in the compiler", "expected": {"action": "excerpt", "query": "tail call optimization compiler"}, "tier": 2}
+{"input": "tail latency issues with the redis cache", "expected": {"action": "excerpt", "query": "redis cache tail latency"}, "tier": 2}
+{"input": "tail chasing in the planning meeting", "expected": {"action": "excerpt", "query": "planning meeting"}, "tier": 2}
+{"input": "tail 5 items on the todo list", "expected": {"action": "excerpt", "query": "todo list items"}, "tier": 2}
+{"input": "tail -10 questions from the survey", "expected": {"action": "excerpt", "query": "survey questions"}, "tier": 2}
+{"input": "tail 100 things I learned this year", "expected": {"action": "excerpt", "query": "things learned this year"}, "tier": 2}
+{"input": "tail 3 comments on the pull request", "expected": {"action": "excerpt", "query": "pull request comments"}, "tier": 2}
+{"input": "tail 50 problems with our legacy stack", "expected": {"action": "excerpt", "query": "legacy stack problems"}, "tier": 2}
 {"input": "find out what I wrote about docker", "expected": {"action": "excerpt", "query": "docker"}, "tier": 2}
 {"input": "I can't find the motivation to work on this", "expected": {"action": "locate", "query": "motivation"}, "tier": 2}
+{"input": "find the auth middleware file", "expected": {"action": "locate", "query": "auth middleware"}, "tier": 2}
+{"input": "find where we handle network timeouts", "expected": {"action": "locate", "query": "network timeouts"}, "tier": 2}
+{"input": "find information about the retirement plan", "expected": {"action": "excerpt", "query": "retirement plan"}, "tier": 2}
+{"input": "find someone who knows about kubernetes", "expected": {"action": "excerpt", "query": "kubernetes expert"}, "tier": 2}
+{"input": "find why the build is failing on ci", "expected": {"action": "excerpt", "query": "build failing ci"}, "tier": 2}
+{"input": "find all references to the legacy API", "expected": {"action": "locate", "query": "legacy API references"}, "tier": 2}
+{"input": "find the bug causing memory leaks", "expected": {"action": "locate", "query": "memory leaks bug"}, "tier": 2}
 {"input": "please don't copy my homework", "expected": {"action": "excerpt", "query": "homework"}, "tier": 2}
 {"input": "make a copy of the backup notes", "expected": {"action": "locate", "query": "backup notes"}, "tier": 2}
+{"input": "copy this text here", "expected": {"action": "copy", "query": "text here"}, "tier": 2}
+{"input": "copy the connection string to clipboard", "expected": {"action": "copy", "query": "connection string"}, "tier": 2}
+{"input": "copy and paste the error message", "expected": {"action": "copy", "query": "error message"}, "tier": 2}
+{"input": "copy my homework from yesterday", "expected": {"action": "copy", "query": "homework yesterday"}, "tier": 2}
+{"input": "copy everything we discussed earlier", "expected": {"action": "copy", "query": "discussed earlier"}, "tier": 2}
+{"input": "copy that into the email draft", "expected": {"action": "copy", "query": "email draft"}, "tier": 2}
+{"input": "copy all files to backup location", "expected": {"action": "copy", "query": "backup location"}, "tier": 2}
+{"input": "copy the database password for staging", "expected": {"action": "copy", "query": "staging database password"}, "tier": 2}
 {"input": "where is my resume", "expected": {"action": "locate", "query": "where is my resume"}, "tier": 2}
 {"input": "the docker notes file", "expected": {"action": "locate", "query": "the docker notes file"}, "tier": 2}
 {"input": "the kubernetes guide", "expected": {"action": "locate", "query": "the kubernetes guide"}, "tier": 2}
 {"input": "what folder is the frontend app in", "expected": {"action": "locate", "query": "what folder is the frontend app in"}, "tier": 2}
 {"input": "wher is the backend config", "expected": {"action": "locate", "query": "wher is the backend config"}, "tier": 2}
 {"input": "locate the postgres connection details", "expected": {"action": "locate", "query": "locate the postgres connection details"}, "tier": 2}
-{"input": "find the auth middleware file", "expected": {"action": "locate", "query": "find the auth middleware file"}, "tier": 2}
 {"input": "where did i put the aws credentials", "expected": {"action": "locate", "query": "where did i put the aws credentials"}, "tier": 2}
 {"input": "the file with all the regex patterns", "expected": {"action": "locate", "query": "the file with all the regex patterns"}, "tier": 2}
 {"input": "search for the main entrypoint", "expected": {"action": "locate", "query": "search for the main entrypoint"}, "tier": 2}
@@ -62,7 +188,6 @@
 {"input": "what is the maximum file size for uploads", "expected": {"action": "excerpt", "query": "what is the maximum file size for uploads"}, "tier": 2}
 {"input": "whos the lead for the mobile app", "expected": {"action": "excerpt", "query": "whos the lead for the mobile app"}, "tier": 2}
 {"input": "what did we decide on the new caching strategy", "expected": {"action": "excerpt", "query": "what did we decide on the new caching strategy"}, "tier": 2}
-{"input": "how does the authentication flow work", "expected": {"action": "excerpt", "query": "how does the authentication flow work"}, "tier": 2}
 {"input": "give me a summary of the latest release notes", "expected": {"action": "excerpt", "query": "give me a summary of the latest release notes"}, "tier": 2}
 {"input": "what are the main features of the new dashboard", "expected": {"action": "excerpt", "query": "what are the main features of the new dashboard"}, "tier": 2}
 {"input": "let me see the whole config file", "expected": {"action": "read", "query": "let me see the whole config file"}, "tier": 2}
@@ -85,7 +210,6 @@
 {"input": "open up the markdown notes", "expected": {"action": "open", "query": "open up the markdown notes"}, "tier": 2}
 {"input": "i wanna open the sql dump", "expected": {"action": "open", "query": "i wanna open the sql dump"}, "tier": 2}
 {"input": "pls open the python script", "expected": {"action": "open", "query": "pls open the python script"}, "tier": 2}
-{"input": "copy the connection string to clipboard", "expected": {"action": "copy", "query": "copy the connection string to clipboard"}, "tier": 2}
 {"input": "yank the regex pattern", "expected": {"action": "copy", "query": "yank the regex pattern"}, "tier": 2}
 {"input": "put the api key on my clipboard", "expected": {"action": "copy", "query": "put the api key on my clipboard"}, "tier": 2}
 {"input": "copy the whole setup block", "expected": {"action": "copy", "query": "copy the whole setup block"}, "tier": 2}
@@ -97,7 +221,7 @@
 {"input": "put the password in the clipboard", "expected": {"action": "copy", "query": "put the password in the clipboard"}, "tier": 2}
 {"input": "what's in ~/projects", "expected": {"action": "list", "query": "what's in ~/projects"}, "tier": 2}
 {"input": "show me the files in the temp directory", "expected": {"action": "list", "query": "show me the files in the temp directory"}, "tier": 2}
-{"input": "list everything under /var/www", "expected": {"action": "list", "query": "list everything under /var/www"}, "tier": 2}
+{"input": "list everything under the www folder", "expected": {"action": "list", "query": "list everything under the www folder"}, "tier": 2}
 {"input": "what directories are in the src folder", "expected": {"action": "list", "query": "what directories are in the src folder"}, "tier": 2}
 {"input": "give me a listing of the assets dir", "expected": {"action": "list", "query": "give me a listing of the assets dir"}, "tier": 2}
 {"input": "what files are sitting in downloads", "expected": {"action": "list", "query": "what files are sitting in downloads"}, "tier": 2}
