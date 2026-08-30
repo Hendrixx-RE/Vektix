@@ -30,6 +30,7 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/config"
 	"github.com/Hendrixx-RE/Vektix/internal/excerpt"
 	"github.com/Hendrixx-RE/Vektix/internal/fileops"
+	"github.com/Hendrixx-RE/Vektix/internal/format"
 	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/resolve"
@@ -1321,45 +1322,15 @@ func looksLikePath(arg string) bool {
 
 // displayPath shortens $HOME to ~ so output matches how people refer to files.
 func displayPath(path string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return path
-	}
-	if path == home {
-		return "~"
-	}
-	if strings.HasPrefix(path, home+string(filepath.Separator)) {
-		return "~" + path[len(home):]
-	}
-	return path
+	return format.DisplayPath(path)
 }
 
 func humanInt(n int) string {
-	s := strconv.Itoa(n)
-	if n < 0 {
-		return s
-	}
-	var b strings.Builder
-	for i, r := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			b.WriteByte(',')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
+	return format.HumanInt(n)
 }
 
 func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%dB", n)
-	}
-	div, exp := int64(unit), 0
-	for v := n / unit; v >= unit; v /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
+	return format.HumanBytes(n)
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,8 +1464,5 @@ func runStatus(e *env, args []string) int {
 }
 
 func formatDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	return fmt.Sprintf("%.1fs", d.Seconds())
+	return format.FormatDuration(d)
 }

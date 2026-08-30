@@ -252,10 +252,9 @@ Mapped against `plan.md`'s six phases:
   regression fixtures, schema-constrained Tier-2 classification. Clipboard
   (`wl-copy`→`xclip`→`xsel`→OSC 52) is implemented. **Missing:** the CLI never calls the router; the
   only caller today is `scripts/eval_intent.go` and the test suite.
-- **Phase 5 — TUI: not started.** Every file under `internal/tui/` is a one-line `package tui`
-  stub. The Bubble Tea / Lip Gloss / Bubbles / Glamour dependencies aren't even in `go.mod` yet.
-- **Phase 6 — Sync & polish: not started.** `internal/index/sync.go` and `internal/session/refs.go`
-  are one-line stubs. `internal/eval/` (`runner.go`, `metrics.go`) is an empty package — the real
+- **Phase 5 — TUI: implemented.** Interactive Bubble Tea TUI (`internal/tui/`), query loop with 2-tier router integration, verbatim excerpt rendering, ambiguous candidate picker, active scope status bar, indexing progress view, and keyboard shortcuts (`[o]`, `[c]`, `[e]`, `[n]`).
+- **Phase 6 — Sync & polish: in progress.** `internal/index/sync.go` and `internal/session/refs.go`
+  are implemented with ordinal reference tracking and invalidation on scope changes. `internal/eval/` (`runner.go`, `metrics.go`) is an empty package — the real
   intent eval currently lives in `scripts/eval_intent.go` instead. No `locate_eval.jsonl` or
   `testdata/corpus/` exist yet, only `testdata/intent_eval.jsonl`.
 

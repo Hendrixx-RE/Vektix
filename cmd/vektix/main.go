@@ -20,20 +20,60 @@ import (
 	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
+	"github.com/Hendrixx-RE/Vektix/internal/tui"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-isatty"
 )
 
 var version = "dev"
 
+func isTTY() bool {
+	return isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+}
+
+func isTUIFlag(cmd string) bool {
+	return cmd == "-g" || cmd == "--global" || cmd == "-global" ||
+		cmd == "--scope" || cmd == "-scope" ||
+		strings.HasPrefix(cmd, "--scope=") || strings.HasPrefix(cmd, "-scope=") ||
+		strings.HasPrefix(cmd, "--global=") || strings.HasPrefix(cmd, "-global=")
+}
+
 func main() {
 	if len(os.Args) < 2 {
+		if isTTY() {
+			tuiCmd(nil)
+			return
+		}
 		printUsage()
 		os.Exit(1)
 	}
 
 	command := os.Args[1]
 
+	// Handle standard help and version flags
+	if command == "-h" || command == "--help" || command == "-help" || command == "help" {
+		printUsage()
+		return
+	}
+	if command == "-v" || command == "--version" || command == "-version" || command == "version" {
+		fmt.Printf("vektix version %s\n", version)
+		return
+	}
+
+	// Handle TUI flags when invoked without explicit "tui" subcommand
+	if isTUIFlag(command) {
+		if isTTY() {
+			tuiCmd(os.Args[1:])
+			return
+		}
+		printUsage()
+		os.Exit(1)
+	}
+
 	// Setup basic flag sets for each subcommand if needed
 	switch command {
+	case "tui":
+		tuiCmd(os.Args[2:])
 	case "setup":
 		setupCmd(os.Args[2:])
 	case "doctor":
@@ -60,8 +100,6 @@ func main() {
 		statusCmd(os.Args[2:])
 	case "eval":
 		evalCmd(os.Args[2:])
-	case "version":
-		fmt.Printf("vektix version %s\n", version)
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -73,9 +111,10 @@ func printUsage() {
 	fmt.Printf(`Vektix — A local, privacy-first file locator
 
 Usage:
-  vektix <command> [arguments]
+  vektix [command] [arguments]
 
 Commands:
+  tui       Launch interactive TUI (default when run with no arguments)
   setup     Initialize Vektix and prepare models
   doctor    Check system health and dependencies
   index     Index local files and directories
@@ -91,6 +130,38 @@ Commands:
   eval      Run evaluation suite
   version   Print version information
 `)
+}
+
+func tuiCmd(args []string) {
+	fs := flag.NewFlagSet("tui", flag.ExitOnError)
+	scope := fs.String("scope", "", "confine search to this directory")
+	global := fs.Bool("global", false, "search the whole index globally")
+	fs.BoolVar(global, "g", false, "shorthand for --global")
+	_ = fs.Parse(args)
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	cwd, _ := os.Getwd()
+	app, err := tui.New(tui.Options{
+		Config:      &cfg,
+		Cwd:         cwd,
+		ScopeTarget: *scope,
+		Global:      *global,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing TUI: %v\n", err)
+		os.Exit(1)
+	}
+
+	p := tea.NewProgram(app, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func checkOllamaReachable(host string) error {
