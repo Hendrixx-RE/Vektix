@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Hendrixx-RE/Vektix/internal/config"
+	"github.com/Hendrixx-RE/Vektix/internal/eval"
 	"github.com/Hendrixx-RE/Vektix/internal/index"
 	"github.com/Hendrixx-RE/Vektix/internal/ollama"
 	"github.com/Hendrixx-RE/Vektix/internal/store"
@@ -541,8 +542,89 @@ func reindexCmd(args []string) {
 
 func evalCmd(args []string) {
 	fs := flag.NewFlagSet("eval", flag.ExitOnError)
-	dataset := fs.String("dataset", "", "dataset to run eval against")
+	dataset := fs.String("dataset", "", "dataset file to run eval against")
+	corpusDir := fs.String("corpus", "", "fixture corpus directory for locate eval (defaults to testdata/corpus)")
+	dataDir := fs.String("data-dir", "", "data directory for eval index store")
+	jsonOut := fs.Bool("json", false, "output machine-readable JSON")
+	limit := fs.Int("limit", 3, "top-k limit for retrieval evaluations")
 	_ = fs.Parse(args)
 
-	fmt.Printf("not yet implemented: eval (dataset=%s, args=%v)\n", *dataset, fs.Args())
+	targetDataset := *dataset
+	if targetDataset == "" && len(fs.Args()) > 0 {
+		targetDataset = fs.Args()[0]
+	}
+	if targetDataset == "" {
+		targetDataset = "testdata/locate_eval.jsonl"
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	dsType, err := eval.DetectDatasetType(targetDataset)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error detecting dataset type for %s: %v\n", targetDataset, err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	runnerOpts := eval.RunnerOptions{
+		Config:    &cfg,
+		CorpusDir: *corpusDir,
+		DataDir:   *dataDir,
+		Limit:     *limit,
+		RRFK:      cfg.Search.RRFK,
+		MinArms:   cfg.Search.MinArms,
+	}
+
+	switch dsType {
+	case eval.DatasetTypeIntent:
+		metrics, results, err := eval.RunIntent(ctx, targetDataset, runnerOpts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Intent evaluation failed: %v\n", err)
+			os.Exit(1)
+		}
+		if *jsonOut {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"dataset": targetDataset,
+				"type":    "intent",
+				"metrics": metrics,
+				"results": results,
+			})
+			return
+		}
+		fmt.Print(metrics.String())
+
+	case eval.DatasetTypeLocate:
+		corpusIndex, err := eval.LoadOrIndexCorpus(ctx, runnerOpts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to load/index evaluation corpus: %v\n", err)
+			os.Exit(1)
+		}
+
+		metrics, results, err := eval.RunLocate(ctx, corpusIndex, targetDataset, runnerOpts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Locate evaluation failed: %v\n", err)
+			os.Exit(1)
+		}
+		if *jsonOut {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"dataset": targetDataset,
+				"type":    "locate",
+				"metrics": metrics,
+				"results": results,
+			})
+			return
+		}
+		fmt.Print(metrics.String())
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unrecognized dataset format in %s\n", targetDataset)
+		os.Exit(1)
+	}
 }
+

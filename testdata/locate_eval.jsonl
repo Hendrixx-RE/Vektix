@@ -1,0 +1,51 @@
+{"query": "jwt.go", "expect_path": "pkg/auth/jwt.go", "scope": "global", "expected_text": "ValidateToken"}
+{"query": "ValidateToken", "expect_path": "pkg/auth/jwt.go", "scope": "pkg/auth", "expected_text": "ValidateToken"}
+{"query": "JWT token validation and claims", "expect_path": "pkg/auth/jwt.go", "scope": "global", "expected_text": "Claims"}
+{"query": "user token claims expiration", "expect_path": "pkg/auth/jwt.go", "scope": "pkg/auth", "expected_text": "ExpiresAt"}
+{"query": "pool.go", "expect_path": "pkg/db/pool.go", "scope": "global", "expected_text": "MaxOpenConns"}
+{"query": "database connection pool limits and retry backoff", "expect_path": "pkg/db/pool.go", "scope": "global", "expected_text": "MaxOpenConns"}
+{"query": "MaxOpenConns", "expect_path": "pkg/db/pool.go", "scope": "pkg/db", "expected_text": "MaxOpenConns"}
+{"query": "database health check ping", "expect_path": "pkg/db/pool.go", "scope": "pkg/db", "expected_text": "HealthCheck"}
+{"query": "worker.go", "expect_path": "pkg/queue/worker.go", "scope": "global", "expected_text": "StartWorkers"}
+{"query": "background worker pool concurrency", "expect_path": "pkg/queue/worker.go", "scope": "pkg/queue", "expected_text": "StartWorkers"}
+{"query": "DeadLetterQueue", "expect_path": "pkg/queue/worker.go", "scope": "global", "expected_text": "DeadLetterQueue"}
+{"query": "failed task retry queue", "expect_path": "pkg/queue/worker.go", "scope": "pkg/queue", "expected_text": "failedTasks"}
+{"query": "server.go", "expect_path": "pkg/api/server.go", "scope": "pkg/api", "expected_text": "RateLimitMiddleware"}
+{"query": "rate limiting middleware", "expect_path": "pkg/api/server.go", "scope": "global", "expected_text": "RateLimitMiddleware"}
+{"query": "http server graceful shutdown", "expect_path": "pkg/api/server.go", "scope": "pkg/api", "expected_text": "Shutdown"}
+{"query": "collector.go", "expect_path": "pkg/metrics/collector.go", "scope": "pkg/metrics", "expected_text": "NewCollector"}
+{"query": "prometheus metrics counter and histogram collector", "expect_path": "pkg/metrics/collector.go", "scope": "global", "expected_text": "NewCollector"}
+{"query": "ObserveHistogram", "expect_path": "pkg/metrics/collector.go", "scope": "pkg/metrics", "expected_text": "ObserveHistogram"}
+{"query": "lru.go", "expect_path": "internal/cache/lru.go", "scope": "internal/cache", "expected_text": "evictOldest"}
+{"query": "LRU cache eviction policy and capacity", "expect_path": "internal/cache/lru.go", "scope": "global", "expected_text": "evictOldest"}
+{"query": "evictOldest", "expect_path": "internal/cache/lru.go", "scope": "internal/cache", "expected_text": "evictOldest"}
+{"query": "aes.go", "expect_path": "internal/crypto/aes.go", "scope": "internal/crypto", "expected_text": "Encrypt"}
+{"query": "AES-GCM encryption and decryption utilities", "expect_path": "internal/crypto/aes.go", "scope": "global", "expected_text": "Encrypt"}
+{"query": "main entry point api server", "expect_path": "cmd/server/main.go", "scope": "cmd/server", "expected_text": "main"}
+{"query": "cli maintenance diagnostics command", "expect_path": "cmd/cli/main.go", "scope": "cmd/cli", "expected_text": "main"}
+{"query": "architecture.md", "expect_path": "docs/architecture.md", "scope": "docs", "expected_text": "Architecture Design"}
+{"query": "hybrid search pipeline architecture overview", "expect_path": "docs/architecture.md", "scope": "global", "expected_text": "Hybrid Search"}
+{"query": "adaptive oversampling design", "expect_path": "docs/architecture.md", "scope": "docs", "expected_text": "Adaptive Oversampling"}
+{"query": "api_guide.md", "expect_path": "docs/api_guide.md", "scope": "docs", "expected_text": "/api/v1/query"}
+{"query": "REST API endpoint guide and authentication header", "expect_path": "docs/api_guide.md", "scope": "global", "expected_text": "Authorization: Bearer"}
+{"query": "deployment.md", "expect_path": "docs/deployment.md", "scope": "docs", "expected_text": "HorizontalPodAutoscaler"}
+{"query": "kubernetes helm deployment and pod autoscaling", "expect_path": "docs/deployment.md", "scope": "global", "expected_text": "HorizontalPodAutoscaler"}
+{"query": "contributing.md", "expect_path": "docs/contributing.md", "scope": "docs", "expected_text": "Contributing Guide"}
+{"query": "developer setup and unit tests instructions", "expect_path": "docs/contributing.md", "scope": "global", "expected_text": "Development Setup"}
+{"query": "changelog.txt", "expect_path": "docs/changelog.txt", "scope": "docs", "expected_text": "v1.1.0"}
+{"query": "release notes and version history", "expect_path": "docs/changelog.txt", "scope": "global", "expected_text": "Changelog"}
+{"query": "garbage collection overhead meeting notes", "expect_path": "notes/meeting_notes.txt", "scope": "notes", "expected_text": "Garbage Collection"}
+{"query": "query cache hit rate sync notes", "expect_path": "notes/meeting_notes.txt", "scope": "global", "expected_text": "Query Cache"}
+{"query": "todo.txt", "expect_path": "notes/todo.txt", "scope": "notes", "expected_text": "TODO List"}
+{"query": "session reference backlog items", "expect_path": "notes/todo.txt", "scope": "notes", "expected_text": "session reference"}
+{"query": "app.config.json", "expect_path": "configs/app.config.json", "scope": "configs", "expected_text": "read_timeout_seconds"}
+{"query": "server port and timeout configuration", "expect_path": "configs/app.config.json", "scope": "global", "expected_text": "port"}
+{"query": "database.json", "expect_path": "configs/database.json", "scope": "configs", "expected_text": "max_connections"}
+{"query": "database connection string and ssl mode config", "expect_path": "configs/database.json", "scope": "configs", "expected_text": "ssl_mode"}
+{"query": "redis.json", "expect_path": "configs/redis.json", "scope": "configs", "expected_text": "sentinels"}
+{"query": "redis cluster sentinel configuration", "expect_path": "configs/redis.json", "scope": "configs", "expected_text": "sentinels"}
+{"query": "build.sh", "expect_path": "scripts/build.sh", "scope": "scripts", "expected_text": "go build"}
+{"query": "docker build packaging script", "expect_path": "scripts/build.sh", "scope": "scripts", "expected_text": "docker build"}
+{"query": "deploy.sh", "expect_path": "scripts/deploy.sh", "scope": "scripts", "expected_text": "kubectl rollout"}
+{"query": "kubernetes rollout restart deployment script", "expect_path": "scripts/deploy.sh", "scope": "scripts", "expected_text": "kubectl rollout restart"}
+{"query": "project quickstart and features overview", "expect_path": "README.md", "scope": "global", "expected_text": "Quickstart"}

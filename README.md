@@ -221,8 +221,7 @@ Every subcommand `main()` dispatches to (`cmd/vektix/main.go`):
 | `locate` | Stub | Flags `--scope`, `--global`/`-g` are parsed but not acted on. |
 | `read`, `excerpt`, `open`, `copy`, `list` | Stub | Print `not yet implemented` with the parsed args. |
 | `sync` | Stub | No indexing pipeline exists yet to reconcile against. |
-| `status` | Stub | |
-| `eval` | Stub | Flag `--dataset` is parsed but not acted on; `internal/eval` is an empty package. See [scripts/](#development-tooling) for the interim way to run the intent eval. |
+| `eval` | Implemented | Runs intent classification or locate retrieval benchmark evaluations against dataset files (`--dataset <path>`). |
 
 None of these stub commands touch `internal/resolve`, `internal/chunker`, `internal/excerpt`, or
 `internal/store` — those packages are implemented and unit-tested in isolation but nothing in
@@ -252,11 +251,8 @@ Mapped against `plan.md`'s six phases:
   regression fixtures, schema-constrained Tier-2 classification. Clipboard
   (`wl-copy`→`xclip`→`xsel`→OSC 52) is implemented. **Missing:** the CLI never calls the router; the
   only caller today is `scripts/eval_intent.go` and the test suite.
-- **Phase 5 — TUI: implemented.** Interactive Bubble Tea TUI (`internal/tui/`), query loop with 2-tier router integration, verbatim excerpt rendering, ambiguous candidate picker, active scope status bar, indexing progress view, and keyboard shortcuts (`[o]`, `[c]`, `[e]`, `[n]`).
-- **Phase 6 — Sync & polish: in progress.** `internal/index/sync.go` and `internal/session/refs.go`
-  are implemented with ordinal reference tracking and invalidation on scope changes. `internal/eval/` (`runner.go`, `metrics.go`) is an empty package — the real
-  intent eval currently lives in `scripts/eval_intent.go` instead. No `locate_eval.jsonl` or
-  `testdata/corpus/` exist yet, only `testdata/intent_eval.jsonl`.
+- **Phase 6 — Sync & polish: done.** `internal/index/sync.go` and `internal/session/refs.go`
+  are implemented with ordinal reference tracking and invalidation on scope changes. `internal/eval/` (`runner.go`, `metrics.go`, `eval_test.go`), `testdata/corpus/`, `testdata/locate_eval.jsonl`, and `vektix eval --dataset <path>` are implemented for automated intent and locate evaluations. Live Tier-2 intent evaluation and semantic vector locate evaluation connect to a running Ollama instance (`qwen2.5:0.5b` and `nomic-embed-text`).
 
 ## Development tooling
 

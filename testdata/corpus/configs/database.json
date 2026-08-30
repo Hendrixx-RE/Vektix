@@ -1,0 +1,12 @@
+{
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "user": "postgres",
+    "name": "vektix_db",
+    "ssl_mode": "require",
+    "max_connections": 50,
+    "idle_connections": 10,
+    "connection_timeout_ms": 5000
+  }
+}

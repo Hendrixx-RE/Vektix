@@ -1,0 +1,7 @@
+TODO List
+
+- [ ] Implement token revocation blocklist in Redis.
+- [ ] Add rate limiting unit tests for burst traffic.
+- [ ] Investigate session reference ordinal resolution edge cases.
+- [ ] Write Helm templates for Redis Sentinel cluster.
+- [ ] Optimize AES-GCM buffer allocation in crypto utilities.

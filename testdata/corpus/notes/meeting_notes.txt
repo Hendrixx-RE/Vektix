@@ -1,0 +1,11 @@
+Engineering Sync - 2026-07-20
+
+Agenda:
+1. Garbage Collection overhead profiling under heavy load.
+2. Query Cache hit rate improvement from 78% to 92%.
+3. Memory leak investigation in long-running worker tasks.
+
+Action Items:
+- Benchmark LRU cache with 100k items.
+- Tune GOGC=80 in production environment.
+- Add histogram metrics for DB query duration.
