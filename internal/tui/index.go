@@ -75,6 +75,15 @@ func listenProgress(ch <-chan index.Progress) tea.Cmd {
 
 // Start initiates an asynchronous index or sync pipeline with live progress messaging.
 func (m *IndexModel) Start(cfg *config.Config, roots []string, mode index.Mode) tea.Cmd {
+	return m.startWithOptions(cfg, roots, mode, false)
+}
+
+// StartTransient initiates an ephemeral indexing run for a single directory.
+func (m *IndexModel) StartTransient(cfg *config.Config, root string) tea.Cmd {
+	return m.startWithOptions(cfg, []string{root}, index.ModeIndex, true)
+}
+
+func (m *IndexModel) startWithOptions(cfg *config.Config, roots []string, mode index.Mode, transient bool) tea.Cmd {
 	m.Running = true
 	m.Mode = mode
 	m.Roots = roots
@@ -115,6 +124,7 @@ func (m *IndexModel) Start(cfg *config.Config, roots []string, mode index.Mode) 
 		})
 
 		engine := index.NewEngine(cfg, st, cli, dataDir)
+		engine.Transient = transient
 		engine.OnProgress = func(p index.Progress) {
 			select {
 			case ch <- p:

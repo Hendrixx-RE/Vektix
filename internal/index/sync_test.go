@@ -629,3 +629,226 @@ func TestPipeline_MultipleRoots(t *testing.T) {
 		t.Errorf("expected 2 roots in manifest, got %d", len(m.Roots))
 	}
 }
+
+// TestPipeline_TransientIndexing tests indexing an ephemeral/transient subtree.
+func TestPipeline_TransientIndexing(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "transient_doc.txt")
+	mustWriteFile(t, filePath, "This is an ephemeral file.")
+
+	ts := newMockEmbedServer(t, 4, nil)
+	defer ts.Close()
+	client := ollama.NewClient(ollama.Options{Host: ts.URL, EmbedTimeout: 5 * time.Second})
+	st := newTestStore(t)
+	dataDir := t.TempDir()
+
+	e := &Engine{
+		Store:     st,
+		Embedder:  client,
+		IndexCfg:  testIndexConfig(),
+		Identity:  DefaultIdentity("mock-model"),
+		DataDir:   dataDir,
+		Transient: true,
+	}
+
+	res, err := e.Run(context.Background(), []string{root}, ModeIndex)
+	if err != nil {
+		t.Fatalf("transient index run: %v", err)
+	}
+	if res.Indexed != 1 || res.Chunks != 1 {
+		t.Fatalf("expected 1 file and chunk indexed, got %d files, %d chunks", res.Indexed, res.Chunks)
+	}
+
+	// Verify manifest has Transient set for file and TransientRoots recorded
+	m, err := LoadManifest(ManifestPath(dataDir))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if meta, ok := m.Files[filePath]; !ok {
+		t.Fatalf("file not found in manifest")
+	} else if !meta.Transient {
+		t.Errorf("expected file meta.Transient == true")
+	}
+
+	absRoot, _ := filepath.Abs(root)
+	if _, ok := m.TransientRoots[absRoot]; !ok {
+		t.Errorf("expected transient root %s in m.TransientRoots: %+v", absRoot, m.TransientRoots)
+	}
+
+	// Verify chunk in store has Transient = true
+	chunk, err := st.GetByID(context.Background(), m.Files[filePath].Chunks[0])
+	if err != nil {
+		t.Fatalf("get chunk from store: %v", err)
+	}
+	if !chunk.Transient {
+		t.Errorf("expected chunk.Transient == true in store")
+	}
+}
+
+// TestPipeline_TransientLRUExpiry tests that vektix sync evicts expired and excess transient roots.
+func TestPipeline_TransientLRUExpiry(t *testing.T) {
+	permRoot := t.TempDir()
+	transientOldRoot := t.TempDir()
+	transientActiveRoot := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(permRoot, "perm.txt"), "Permanent file.")
+	mustWriteFile(t, filepath.Join(transientOldRoot, "old.txt"), "Old transient file.")
+	mustWriteFile(t, filepath.Join(transientActiveRoot, "active.txt"), "Active transient file.")
+
+	ts := newMockEmbedServer(t, 4, nil)
+	defer ts.Close()
+	client := ollama.NewClient(ollama.Options{Host: ts.URL, EmbedTimeout: 5 * time.Second})
+	st := newTestStore(t)
+	dataDir := t.TempDir()
+
+	idxCfg := testIndexConfig()
+	idxCfg.TransientRetentionDays = 3
+	idxCfg.MaxTransientRoots = 5
+
+	e := &Engine{
+		Store:    st,
+		Embedder: client,
+		IndexCfg: idxCfg,
+		Identity: DefaultIdentity("mock-model"),
+		DataDir:  dataDir,
+	}
+
+	// 1. Index permanent root
+	_, err := e.Run(context.Background(), []string{permRoot}, ModeIndex)
+	if err != nil {
+		t.Fatalf("perm index run: %v", err)
+	}
+
+	// 2. Index old transient root
+	e.Transient = true
+	_, err = e.Run(context.Background(), []string{transientOldRoot}, ModeIndex)
+	if err != nil {
+		t.Fatalf("old transient index run: %v", err)
+	}
+
+	// 3. Index active transient root
+	_, err = e.Run(context.Background(), []string{transientActiveRoot}, ModeIndex)
+	if err != nil {
+		t.Fatalf("active transient index run: %v", err)
+	}
+
+	// Manually age the old transient root beyond 3 days in manifest
+	m, err := LoadManifest(ManifestPath(dataDir))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	absOldRoot, _ := filepath.Abs(transientOldRoot)
+	m.TransientRoots[absOldRoot] = time.Now().Add(-5 * 24 * time.Hour).Unix()
+	if err := m.SaveManifest(ManifestPath(dataDir)); err != nil {
+		t.Fatalf("save manifest: %v", err)
+	}
+
+	// 4. Run ModeSync
+	e.Transient = false
+	syncRes, err := e.Run(context.Background(), nil, ModeSync)
+	if err != nil {
+		t.Fatalf("sync run: %v", err)
+	}
+
+	if syncRes.Removed == 0 {
+		t.Errorf("expected at least 1 file removed during sync transient expiry")
+	}
+
+	// 5. Verify manifest state after sync
+	mAfter, err := LoadManifest(ManifestPath(dataDir))
+	if err != nil {
+		t.Fatalf("load manifest after sync: %v", err)
+	}
+
+	// Old transient root must be removed
+	if _, ok := mAfter.TransientRoots[absOldRoot]; ok {
+		t.Errorf("expected old transient root %s to be evicted from TransientRoots", absOldRoot)
+	}
+	oldFilePath := filepath.Join(transientOldRoot, "old.txt")
+	if _, ok := mAfter.Files[oldFilePath]; ok {
+		t.Errorf("expected old transient file %s to be purged from manifest", oldFilePath)
+	}
+
+	// Active transient root must be kept
+	absActiveRoot, _ := filepath.Abs(transientActiveRoot)
+	if _, ok := mAfter.TransientRoots[absActiveRoot]; !ok {
+		t.Errorf("expected active transient root %s to be kept in TransientRoots", absActiveRoot)
+	}
+	activeFilePath := filepath.Join(transientActiveRoot, "active.txt")
+	if _, ok := mAfter.Files[activeFilePath]; !ok {
+		t.Errorf("expected active transient file %s to be kept in manifest", activeFilePath)
+	}
+
+	// Permanent file must be kept
+	permFilePath := filepath.Join(permRoot, "perm.txt")
+	if _, ok := mAfter.Files[permFilePath]; !ok {
+		t.Errorf("expected perm file %s to be kept in manifest", permFilePath)
+	}
+}
+
+// TestPipeline_TransientMaxRootsEviction tests that when transient roots exceed MaxTransientRoots, the oldest are evicted.
+func TestPipeline_TransientMaxRootsEviction(t *testing.T) {
+	root1 := t.TempDir()
+	root2 := t.TempDir()
+	root3 := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(root1, "f1.txt"), "Root 1")
+	mustWriteFile(t, filepath.Join(root2, "f2.txt"), "Root 2")
+	mustWriteFile(t, filepath.Join(root3, "f3.txt"), "Root 3")
+
+	ts := newMockEmbedServer(t, 4, nil)
+	defer ts.Close()
+	client := ollama.NewClient(ollama.Options{Host: ts.URL, EmbedTimeout: 5 * time.Second})
+	st := newTestStore(t)
+	dataDir := t.TempDir()
+
+	idxCfg := testIndexConfig()
+	idxCfg.TransientRetentionDays = 30
+	idxCfg.MaxTransientRoots = 2 // only allow 2 transient roots
+
+	e := &Engine{
+		Store:     st,
+		Embedder:  client,
+		IndexCfg:  idxCfg,
+		Identity:  DefaultIdentity("mock-model"),
+		DataDir:   dataDir,
+		Transient: true,
+	}
+
+	// Index 3 transient roots
+	_, _ = e.Run(context.Background(), []string{root1}, ModeIndex)
+	_, _ = e.Run(context.Background(), []string{root2}, ModeIndex)
+	_, _ = e.Run(context.Background(), []string{root3}, ModeIndex)
+
+	// Set timestamps: root1 = oldest (now - 300), root2 = middle (now - 200), root3 = newest (now - 100)
+	m, _ := LoadManifest(ManifestPath(dataDir))
+	abs1, _ := filepath.Abs(root1)
+	abs2, _ := filepath.Abs(root2)
+	abs3, _ := filepath.Abs(root3)
+	now := time.Now().Unix()
+	m.TransientRoots[abs1] = now - 300
+	m.TransientRoots[abs2] = now - 200
+	m.TransientRoots[abs3] = now - 100
+	_ = m.SaveManifest(ManifestPath(dataDir))
+
+	// Sync should evict root1 because capacity is 2
+	e.Transient = false
+	_, err := e.Run(context.Background(), nil, ModeSync)
+	if err != nil {
+		t.Fatalf("sync run: %v", err)
+	}
+
+	mAfter, _ := LoadManifest(ManifestPath(dataDir))
+	if len(mAfter.TransientRoots) != 2 {
+		t.Errorf("expected 2 transient roots, got %d: %+v", len(mAfter.TransientRoots), mAfter.TransientRoots)
+	}
+	if _, ok := mAfter.TransientRoots[abs1]; ok {
+		t.Errorf("expected oldest transient root %s to be evicted", abs1)
+	}
+	if _, ok := mAfter.TransientRoots[abs2]; !ok {
+		t.Errorf("expected transient root %s to remain", abs2)
+	}
+	if _, ok := mAfter.TransientRoots[abs3]; !ok {
+		t.Errorf("expected transient root %s to remain", abs3)
+	}
+}

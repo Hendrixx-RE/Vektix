@@ -7,13 +7,19 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/Hendrixx-RE/Vektix/internal/config"
 )
 
 type FileMeta struct {
-	Mtime  int64    `json:"mtime"`
-	Size   int64    `json:"size"`
-	Hash   string   `json:"hash"`
-	Chunks []string `json:"chunks"`
+	Mtime     int64    `json:"mtime"`
+	Size      int64    `json:"size"`
+	Hash      string   `json:"hash"`
+	Chunks    []string `json:"chunks"`
+	Transient bool     `json:"transient,omitempty"`
 }
 
 type Manifest struct {
@@ -22,11 +28,15 @@ type Manifest struct {
 	PrefixScheme   string              `json:"prefix_scheme"`
 	ChunkerVersion int                 `json:"chunker_version"`
 	Roots          []string            `json:"roots"`
+	TransientRoots map[string]int64    `json:"transient_roots,omitempty"`
 	Files          map[string]FileMeta `json:"files"`
 	DirCounts      map[string]int      `json:"dir_counts"`
 }
 
-var ErrManifestMismatch = errors.New("index manifest mismatch: please run 'vektix reindex'")
+var (
+	ErrManifestMismatch = errors.New("index manifest mismatch: please run 'vektix reindex'")
+	errChangeDetected   = errors.New("change detected")
+)
 
 // CheckValidity compares critical fields. If they mismatch, it returns an error pointing to 'vektix reindex'.
 func (m *Manifest) CheckValidity(model string, dim int, prefix string, chunkerVer int) error {
@@ -34,6 +44,98 @@ func (m *Manifest) CheckValidity(model string, dim int, prefix string, chunkerVe
 		return ErrManifestMismatch
 	}
 	return nil
+}
+
+// TouchTransientRoot updates the last-access timestamp for a transient root.
+func (m *Manifest) TouchTransientRoot(root string) {
+	if m.TransientRoots == nil {
+		m.TransientRoots = make(map[string]int64)
+	}
+	if _, ok := m.TransientRoots[root]; ok {
+		m.TransientRoots[root] = time.Now().Unix()
+	}
+}
+
+// TouchPath updates the last-access timestamp of any transient root enclosing path.
+func (m *Manifest) TouchPath(path string) bool {
+	if len(m.TransientRoots) == 0 {
+		return false
+	}
+	touched := false
+	for root := range m.TransientRoots {
+		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+			m.TransientRoots[root] = time.Now().Unix()
+			touched = true
+		}
+	}
+	return touched
+}
+
+// IsStale checks if the files under indexed roots have changed compared to the stored metadata.
+// It returns true on the first detected modification, addition, or deletion without needing
+// to complete a full scan when a change is found early.
+func (m *Manifest) IsStale(cfg *config.IndexConfig) (bool, error) {
+	if m == nil || len(m.Roots) == 0 {
+		return false, nil
+	}
+
+	// 1. Check existing manifest files: if any file was deleted or modified on disk
+	for path, meta := range m.Files {
+		info, err := os.Stat(path)
+		if err != nil {
+			// File was deleted or became inaccessible
+			return true, nil
+		}
+		if info.Size() != meta.Size {
+			return true, nil
+		}
+		if info.ModTime().UnixNano() != meta.Mtime {
+			hash, err := HashFile(path)
+			if err != nil || hash != meta.Hash {
+				return true, nil
+			}
+		}
+	}
+
+	// 2. Check roots: walk to see if any new files were added or existing ones modified
+	walker := NewWalker(cfg)
+	for _, root := range m.Roots {
+		rootInfo, err := os.Stat(root)
+		if err != nil {
+			// Root is missing or inaccessible
+			return true, nil
+		}
+		if !rootInfo.IsDir() {
+			continue
+		}
+
+		err = walker.Walk(root, func(path string, info os.FileInfo) error {
+			meta, ok := m.Files[path]
+			if !ok {
+				// New file added
+				return errChangeDetected
+			}
+			if info.Size() != meta.Size {
+				return errChangeDetected
+			}
+			if info.ModTime().UnixNano() != meta.Mtime {
+				hash, err := HashFile(path)
+				if err != nil || hash != meta.Hash {
+					return errChangeDetected
+				}
+			}
+			return nil
+		})
+
+		if errors.Is(err, errChangeDetected) {
+			return true, nil
+		}
+		if err != nil {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // HasChanged returns true if the file on disk is different from the stored metadata.
@@ -108,6 +210,9 @@ func LoadManifest(path string) (*Manifest, error) {
 	}
 	if m.DirCounts == nil {
 		m.DirCounts = make(map[string]int)
+	}
+	if m.TransientRoots == nil {
+		m.TransientRoots = make(map[string]int64)
 	}
 	return &m, nil
 }

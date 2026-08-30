@@ -101,3 +101,51 @@ func TestStore_EmptyAdd(t *testing.T) {
 		t.Fatalf("AddDocuments with empty slice failed: %v", err)
 	}
 }
+
+func TestChunk_TransientMetadata(t *testing.T) {
+	c := Chunk{
+		ID:        "doc-transient",
+		Path:      "/tmp/project/foo.go",
+		Content:   "func foo() {}",
+		Transient: true,
+		Locator: Locator{
+			Kind:   LocatorSymbol,
+			Start:  1,
+			End:    3,
+			Symbol: "func foo()",
+		},
+	}
+
+	meta := c.EncodeMetadata()
+	if meta["transient"] != "true" {
+		t.Errorf("expected transient='true', got %q", meta["transient"])
+	}
+
+	decoded, err := DecodeMetadata(meta)
+	if err != nil {
+		t.Fatalf("DecodeMetadata failed: %v", err)
+	}
+	if !decoded.Transient {
+		t.Errorf("expected decoded.Transient == true")
+	}
+	if decoded.Locator.Symbol != "func foo()" {
+		t.Errorf("expected symbol 'func foo()', got %q", decoded.Locator.Symbol)
+	}
+
+	cNonTransient := Chunk{
+		ID:        "doc-perm",
+		Path:      "/tmp/project/bar.go",
+		Transient: false,
+	}
+	metaNonTransient := cNonTransient.EncodeMetadata()
+	if _, ok := metaNonTransient["transient"]; ok {
+		t.Errorf("expected no 'transient' key for non-transient chunk, got %q", metaNonTransient["transient"])
+	}
+	decodedNonTransient, err := DecodeMetadata(metaNonTransient)
+	if err != nil {
+		t.Fatalf("DecodeMetadata failed: %v", err)
+	}
+	if decodedNonTransient.Transient {
+		t.Errorf("expected decodedNonTransient.Transient == false")
+	}
+}

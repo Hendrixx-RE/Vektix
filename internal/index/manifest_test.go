@@ -81,3 +81,109 @@ func TestManifestChangeDetection(t *testing.T) {
 		t.Errorf("expected unchanged because hash matches even with different mtime")
 	}
 }
+
+func TestManifest_IsStale(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "project")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	fileA := filepath.Join(root, "a.txt")
+	fileB := filepath.Join(root, "b.txt")
+	os.WriteFile(fileA, []byte("content a"), 0644)
+	os.WriteFile(fileB, []byte("content b"), 0644)
+
+	infoA, _ := os.Stat(fileA)
+	hashA, _ := HashFile(fileA)
+	infoB, _ := os.Stat(fileB)
+	hashB, _ := HashFile(fileB)
+
+	cfg := testIndexConfig(".txt")
+
+	m := &Manifest{
+		Roots: []string{root},
+		Files: map[string]FileMeta{
+			fileA: {
+				Mtime:  infoA.ModTime().UnixNano(),
+				Size:   infoA.Size(),
+				Hash:   hashA,
+				Chunks: []string{"a-1"},
+			},
+			fileB: {
+				Mtime:  infoB.ModTime().UnixNano(),
+				Size:   infoB.Size(),
+				Hash:   hashB,
+				Chunks: []string{"b-1"},
+			},
+		},
+	}
+
+	// 1. Initially matching manifest: should not be stale
+	stale, err := m.IsStale(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stale {
+		t.Errorf("expected clean manifest to not be stale")
+	}
+
+	// 2. Added a new file: should be stale
+	fileC := filepath.Join(root, "c.txt")
+	os.WriteFile(fileC, []byte("content c"), 0644)
+	stale, err = m.IsStale(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !stale {
+		t.Errorf("expected manifest to be stale after adding file c.txt")
+	}
+	_ = os.Remove(fileC)
+
+	// 3. Modified existing file size: should be stale
+	os.WriteFile(fileA, []byte("content a modified longer"), 0644)
+	stale, err = m.IsStale(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !stale {
+		t.Errorf("expected manifest to be stale after modifying file a.txt size")
+	}
+
+	// Restore original fileA
+	os.WriteFile(fileA, []byte("content a"), 0644)
+	os.Chtimes(fileA, infoA.ModTime(), infoA.ModTime())
+
+	// 4. Deleted file: should be stale
+	os.Remove(fileB)
+	stale, err = m.IsStale(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !stale {
+		t.Errorf("expected manifest to be stale after deleting file b.txt")
+	}
+}
+
+func TestManifest_TransientTouch(t *testing.T) {
+	m := &Manifest{
+		TransientRoots: map[string]int64{
+			"/tmp/ephemeral": 1000,
+		},
+	}
+
+	// Path inside ephemeral root
+	touched := m.TouchPath("/tmp/ephemeral/sub/file.go")
+	if !touched {
+		t.Errorf("expected TouchPath to return true for path under transient root")
+	}
+	if m.TransientRoots["/tmp/ephemeral"] <= 1000 {
+		t.Errorf("expected lastAccess to be updated, got %d", m.TransientRoots["/tmp/ephemeral"])
+	}
+
+	// Path outside ephemeral root
+	touched = m.TouchPath("/other/path/file.go")
+	if touched {
+		t.Errorf("expected TouchPath to return false for path outside transient roots")
+	}
+}

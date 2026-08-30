@@ -213,6 +213,10 @@ type Engine struct {
 	// run uses, so they match.
 	DryRun bool
 
+	// Transient marks chunks and file metadata as ephemeral/transient so they can
+	// be expired by vektix sync on an LRU basis.
+	Transient bool
+
 	ParseWorkers int
 	ChunkWorkers int
 	EmbedBatch   int
@@ -347,6 +351,12 @@ func (e *Engine) Run(ctx context.Context, roots []string, mode Mode) (*Result, e
 		if err != nil && runErr == nil {
 			runErr = err
 		}
+
+		if mode == ModeSync {
+			if err := e.expireTransientRoots(ctx, m, res); err != nil && runErr == nil {
+				runErr = err
+			}
+		}
 	}
 
 	res.Quarantined = p.snapshotQuarantine()
@@ -358,6 +368,19 @@ func (e *Engine) Run(ctx context.Context, roots []string, mode Mode) (*Result, e
 	}
 
 	m.Roots = mergeRoots(m.Roots, absRoots)
+	if e.Transient {
+		if m.TransientRoots == nil {
+			m.TransientRoots = make(map[string]int64)
+		}
+		for _, r := range absRoots {
+			m.TransientRoots[r] = time.Now().Unix()
+		}
+	} else if mode == ModeIndex {
+		for _, r := range absRoots {
+			delete(m.TransientRoots, r)
+		}
+	}
+
 	if err := e.persist(m, res.Quarantined); err != nil && runErr == nil {
 		runErr = err
 	}
@@ -369,11 +392,15 @@ func (e *Engine) loadManifest() (*Manifest, bool, error) {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return &Manifest{
-				Files:     make(map[string]FileMeta),
-				DirCounts: make(map[string]int),
+				Files:          make(map[string]FileMeta),
+				DirCounts:      make(map[string]int),
+				TransientRoots: make(map[string]int64),
 			}, false, nil
 		}
 		return nil, false, err
+	}
+	if m.TransientRoots == nil {
+		m.TransientRoots = make(map[string]int64)
 	}
 	return m, true, nil
 }
@@ -400,6 +427,9 @@ func stampIdentity(m *Manifest, id Identity) {
 	}
 	if m.DirCounts == nil {
 		m.DirCounts = make(map[string]int)
+	}
+	if m.TransientRoots == nil {
+		m.TransientRoots = make(map[string]int64)
 	}
 }
 
@@ -484,6 +514,88 @@ func (e *Engine) reconcile(ctx context.Context, m *Manifest, roots []string, see
 		chunks += removeFileMeta(m, path)
 	}
 	return len(orphans), chunks, nil
+}
+
+// expireTransientRoots evicts transient roots and purges their chunks according to the LRU retention policy.
+func (e *Engine) expireTransientRoots(ctx context.Context, m *Manifest, res *Result) error {
+	if len(m.TransientRoots) == 0 {
+		return nil
+	}
+
+	retentionDays := 7
+	if e.IndexCfg != nil && e.IndexCfg.TransientRetentionDays > 0 {
+		retentionDays = e.IndexCfg.TransientRetentionDays
+	}
+	maxRoots := 10
+	if e.IndexCfg != nil && e.IndexCfg.MaxTransientRoots > 0 {
+		maxRoots = e.IndexCfg.MaxTransientRoots
+	}
+
+	now := time.Now().Unix()
+	retentionThreshold := now - int64(retentionDays*24*3600)
+
+	type rootAge struct {
+		root       string
+		lastAccess int64
+	}
+	var active []rootAge
+	var toEvict []string
+
+	for root, lastAccess := range m.TransientRoots {
+		if lastAccess < retentionThreshold {
+			toEvict = append(toEvict, root)
+		} else {
+			active = append(active, rootAge{root: root, lastAccess: lastAccess})
+		}
+	}
+
+	// Sort active roots ascending by lastAccess (oldest first)
+	sort.Slice(active, func(i, j int) bool {
+		return active[i].lastAccess < active[j].lastAccess
+	})
+
+	// If active roots count exceeds maxRoots, evict the oldest active roots
+	if len(active) > maxRoots {
+		excess := len(active) - maxRoots
+		for i := 0; i < excess; i++ {
+			toEvict = append(toEvict, active[i].root)
+		}
+	}
+
+	for _, root := range toEvict {
+		var filesToPurge []string
+		for path, meta := range m.Files {
+			if underRoots(path, []string{root}) || (meta.Transient && strings.HasPrefix(path, root)) {
+				filesToPurge = append(filesToPurge, path)
+			}
+		}
+		sort.Strings(filesToPurge)
+
+		for _, path := range filesToPurge {
+			ids := m.Files[path].Chunks
+			if !e.DryRun && len(ids) > 0 && e.Store != nil {
+				if err := e.Store.Delete(ctx, nil, nil, ids...); err != nil {
+					return fmt.Errorf("purge transient %s: %w", path, err)
+				}
+			}
+			chunks := removeFileMeta(m, path)
+			res.Removed++
+			res.RemovedChunks += chunks
+		}
+
+		delete(m.TransientRoots, root)
+
+		// Remove from m.Roots as well
+		var newRoots []string
+		for _, r := range m.Roots {
+			if r != root {
+				newRoots = append(newRoots, r)
+			}
+		}
+		m.Roots = newRoots
+	}
+
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +930,9 @@ func (p *pipeline) chunkFile(task *fileTask) error {
 	for i := range task.chunks {
 		task.chunks[i].ID = chunkID(task.path, i)
 		task.chunks[i].Path = task.path
+		if p.e.Transient {
+			task.chunks[i].Transient = true
+		}
 	}
 	task.pending = len(task.chunks)
 	task.content = ""
@@ -984,10 +1099,11 @@ func (p *pipeline) storeStage() {
 			ids[i] = c.ID
 		}
 		setFileMeta(p.m, task.path, FileMeta{
-			Mtime:  task.info.ModTime().UnixNano(),
-			Size:   task.info.Size(),
-			Hash:   task.hash,
-			Chunks: ids,
+			Mtime:     task.info.ModTime().UnixNano(),
+			Size:      task.info.Size(),
+			Hash:      task.hash,
+			Chunks:    ids,
+			Transient: p.e.Transient,
 		})
 
 		p.mu.Lock()

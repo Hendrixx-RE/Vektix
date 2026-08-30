@@ -29,18 +29,23 @@ type Chunk struct {
 	Content   string
 	Embedding []float32
 	Locator   Locator
+	Transient bool
 }
 
 // EncodeMetadata encodes the chunk's non-content fields into a map[string]string
 // because chromem-go metadata is explicitly map[string]string.
 func (c *Chunk) EncodeMetadata() map[string]string {
-	return map[string]string{
+	m := map[string]string{
 		"path":          c.Path,
 		"locator_kind":  string(c.Locator.Kind),
 		"locator_start": strconv.Itoa(c.Locator.Start),
 		"locator_end":   strconv.Itoa(c.Locator.End),
 		"locator_sym":   c.Locator.Symbol,
 	}
+	if c.Transient {
+		m["transient"] = "true"
+	}
+	return m
 }
 
 // DecodeMetadata populates a Chunk's fields from a chromem-go metadata map.
@@ -48,6 +53,10 @@ func (c *Chunk) EncodeMetadata() map[string]string {
 func DecodeMetadata(m map[string]string) (Chunk, error) {
 	c := Chunk{
 		Path: m["path"],
+	}
+
+	if m["transient"] == "true" {
+		c.Transient = true
 	}
 
 	c.Locator.Kind = LocatorKind(m["locator_kind"])

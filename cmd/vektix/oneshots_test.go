@@ -129,8 +129,8 @@ func newFixture(t *testing.T) *fixture {
 	m := &index.Manifest{
 		EmbeddingModel: cfg.Ollama.EmbeddingModel,
 		Dim:            4,
-		PrefixScheme:   "v1",
-		ChunkerVersion: 1,
+		PrefixScheme:   index.PrefixScheme,
+		ChunkerVersion: index.ChunkerVersion,
 		Files: map[string]index.FileMeta{
 			infraPath:    {Chunks: []string{"infra-1"}},
 			otherDocPath: {Chunks: []string{"other-1"}},
@@ -534,5 +534,48 @@ func TestStatus_CorruptQuarantine(t *testing.T) {
 	str := out.String()
 	if !strings.Contains(str, "error loading quarantine") {
 		t.Errorf("expected quarantine loading error, got: %s", str)
+	}
+}
+
+// TestLocate_UnindexedCWD_IndexNow tests that when CWD is outside all indexed roots,
+// passing --index-now ephemerally indexes the subtree with transient=true and scopes to it.
+func TestLocate_UnindexedCWD_IndexNow(t *testing.T) {
+	f := newFixture(t)
+
+	// Create an unindexed outside directory
+	unindexedDir := t.TempDir()
+	docPath := filepath.Join(unindexedDir, "recipe.txt")
+	if err := os.WriteFile(docPath, []byte("baking chocolate cookies recipe"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Without --index-now: searches globally and notes CWD is unindexed
+	e1, _, errOut1 := f.testEnv(unindexedDir)
+	_ = runLocate(e1, []string{"cookies"})
+	if !strings.Contains(errOut1.String(), "not under any indexed root") {
+		t.Errorf("expected note about unindexed root, got: %s", errOut1.String())
+	}
+
+	// 2. With --index-now: indexes ephemerally and finds the file
+	e2, out2, errOut2 := f.testEnv(unindexedDir)
+	code2 := runLocate(e2, []string{"--index-now", "cookies"})
+	if code2 != 0 {
+		t.Fatalf("expected exit 0 with --index-now, got %d. stderr: %s, stdout: %s", code2, errOut2.String(), out2.String())
+	}
+	if !strings.Contains(out2.String(), "recipe.txt") {
+		t.Errorf("expected recipe.txt in locate output, got: %s", out2.String())
+	}
+
+	// Check manifest to ensure transient root was recorded
+	m, err := index.LoadManifest(index.ManifestPath(f.dataDir))
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	absUnindexed, _ := filepath.Abs(unindexedDir)
+	if _, ok := m.TransientRoots[absUnindexed]; !ok {
+		t.Errorf("expected transient root %s in manifest TransientRoots: %+v", absUnindexed, m.TransientRoots)
+	}
+	if meta, ok := m.Files[docPath]; !ok || !meta.Transient {
+		t.Errorf("expected file %s to be marked Transient in manifest: %+v", docPath, meta)
 	}
 }

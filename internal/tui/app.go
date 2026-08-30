@@ -190,7 +190,7 @@ func (a *AppModel) loadCorpus() {
 		return
 	}
 
-	manifest, err := index.LoadManifest(dataDir)
+	manifest, err := index.LoadManifest(index.ManifestPath(dataDir))
 	if err != nil {
 		st := a.getScopeState()
 		st.IndexError = "no index found in " + format.DisplayPath(dataDir)
@@ -319,7 +319,59 @@ func isUnderScope(path, scope string) bool {
 
 // Init initializes Bubble Tea sub-components.
 func (a *AppModel) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, a.checkBackgroundReconcileCmd())
+}
+
+type backgroundReconcileStartMsg struct{}
+type backgroundReconcileDoneMsg struct {
+	res *index.Result
+	err error
+}
+
+func (a *AppModel) checkBackgroundReconcileCmd() tea.Cmd {
+	return func() tea.Msg {
+		dataDir, err := config.ExpandPath(a.cfg.General.DataDir)
+		if err != nil {
+			return nil
+		}
+		m, err := index.LoadManifest(index.ManifestPath(dataDir))
+		if err != nil || m == nil || len(m.Roots) == 0 {
+			return nil
+		}
+		stale, err := m.IsStale(&a.cfg.Index)
+		if err != nil || !stale {
+			return nil
+		}
+		return backgroundReconcileStartMsg{}
+	}
+}
+
+func (a *AppModel) runBackgroundReconcileCmd() tea.Cmd {
+	return func() tea.Msg {
+		dataDir, err := config.ExpandPath(a.cfg.General.DataDir)
+		if err != nil {
+			return backgroundReconcileDoneMsg{err: err}
+		}
+		st, err := store.NewPersistentDB(index.StorePath(dataDir))
+		if err != nil {
+			return backgroundReconcileDoneMsg{err: err}
+		}
+		cli := ollama.NewClient(ollama.Options{
+			Host:         a.cfg.Ollama.Host,
+			EmbedTimeout: time.Duration(a.cfg.Ollama.Timeouts.EmbedBatchSeconds) * time.Second,
+		})
+		m, err := index.LoadManifest(index.ManifestPath(dataDir))
+		if err != nil || m == nil {
+			return backgroundReconcileDoneMsg{err: err}
+		}
+
+		engine := index.NewEngine(a.cfg, st, cli, dataDir)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		res, runErr := engine.Run(ctx, m.Roots, index.ModeSync)
+		return backgroundReconcileDoneMsg{res: res, err: runErr}
+	}
 }
 
 type searchCompleteMsg struct {
@@ -370,6 +422,26 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.input.Width = msg.Width - 6
 		return a, nil
 
+	case backgroundReconcileStartMsg:
+		st := a.getScopeState()
+		st.Reconciling = true
+		a.setScopeState(st)
+		return a, a.runBackgroundReconcileCmd()
+
+	case backgroundReconcileDoneMsg:
+		st := a.getScopeState()
+		st.Reconciling = false
+		a.setScopeState(st)
+		if msg.err == nil && msg.res != nil {
+			a.loadCorpus()
+			a.updateScope(a.scopePinned, a.getScopeState().Global)
+			if msg.res.Added > 0 || msg.res.Updated > 0 || msg.res.Removed > 0 {
+				a.sessionRefs.Clear()
+				a.refreshViewport()
+			}
+		}
+		return a, nil
+
 	case IndexProgressMsg:
 		cmd := a.indexer.Update(msg)
 		return a, cmd
@@ -382,7 +454,11 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := a.indexer.Update(msg)
 		if msg.Err == nil {
 			a.loadCorpus()
-			a.updateScope(a.scopePinned, a.getScopeState().Global)
+			if a.scopePinned == "" && !a.getScopeState().Global {
+				a.updateScope(a.cwd, false)
+			} else {
+				a.updateScope(a.scopePinned, a.getScopeState().Global)
+			}
 			a.sessionRefs.Clear()
 		}
 		return a, cmd
@@ -586,6 +662,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			"  :scope <path>    Switch active search scope",
 			"  :global          Search across all indexed roots",
 			"  :index [dir]     Index or reindex directories",
+			"  :index-here      Index current directory ephemerally (transient)",
 			"  :sync            Sync and purge orphan chunks",
 			"  :status          Show active scope and chunk counts",
 			"  :clear           Clear query and chat history",
@@ -674,6 +751,10 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		}
 		a.mode = ModeIndexing
 		return a.indexer.Start(a.cfg, roots, index.ModeIndex)
+
+	case ":index-here", ":index-transient":
+		a.mode = ModeIndexing
+		return a.indexer.StartTransient(a.cfg, a.cwd)
 
 	case ":sync":
 		roots := a.cfg.Index.IndexDirs
@@ -784,6 +865,16 @@ func (a *AppModel) executeIntent(query string) tea.Cmd {
 			}
 		}
 
+		scopeState := a.getScopeState()
+		scope := scopeState.Path
+
+		// Touch transient root if querying within it
+		if scope != "" && c.manifest.TouchPath(scope) {
+			if dataDir, err := config.ExpandPath(a.cfg.General.DataDir); err == nil {
+				_ = c.manifest.SaveManifest(index.ManifestPath(dataDir))
+			}
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -806,8 +897,6 @@ func (a *AppModel) executeIntent(query string) tea.Cmd {
 			}
 		}
 
-		scopeState := a.getScopeState()
-		scope := scopeState.Path
 		k := a.cfg.Search.MaxResults
 		if k <= 0 {
 			k = 8

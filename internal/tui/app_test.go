@@ -381,3 +381,43 @@ func TestApp_ConcurrentLoadCorpusAndSearch(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestApp_IndexHereCommand(t *testing.T) {
+	app, _, _ := newTestApp(t)
+
+	// Issue :index-here command
+	cmd := app.handleSubmit(":index-here")
+	if cmd == nil {
+		t.Fatalf("expected cmd from :index-here")
+	}
+	if app.mode != ModeIndexing {
+		t.Errorf("expected ModeIndexing after :index-here, got %v", app.mode)
+	}
+	if !app.indexer.Running {
+		t.Errorf("expected indexer to be running after :index-here")
+	}
+}
+
+func TestApp_BackgroundReconcileState(t *testing.T) {
+	app, _, _ := newTestApp(t)
+
+	// Simulate background reconcile start message
+	app.Update(backgroundReconcileStartMsg{})
+	if !app.getScopeState().Reconciling {
+		t.Errorf("expected Reconciling = true after backgroundReconcileStartMsg")
+	}
+
+	// Verify status bar renders the reconciling indicator
+	rendered := RenderStatusBar(100, app.getScopeState(), app.theme)
+	if !strings.Contains(rendered, "syncing") {
+		t.Errorf("expected status bar to contain 'syncing' during reconcile, got: %s", rendered)
+	}
+
+	// Simulate background reconcile done message
+	app.Update(backgroundReconcileDoneMsg{
+		res: &index.Result{Unchanged: 5},
+	})
+	if app.getScopeState().Reconciling {
+		t.Errorf("expected Reconciling = false after backgroundReconcileDoneMsg")
+	}
+}
