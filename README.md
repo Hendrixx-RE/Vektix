@@ -6,10 +6,11 @@ Nothing leaves your machine: every model runs locally through [Ollama](https://o
 
 Single static Go binary. No CGO. Go 1.23.0.
 
-> **Status:** early. The core retrieval, router, chunking, excerpt and safety packages are
-> implemented and unit-tested (see [Project status](#project-status)), but they are not yet wired
-> into a working CLI or TUI. Almost every `vektix` subcommand besides `setup`, `doctor` and
-> `version` is currently a stub. See [Known gaps](#known-gaps) before relying on this.
+> **Status:** complete. All six phases of the design specification (`plan.md`) are implemented
+> and tested: hybrid retrieval, chunking, excerpt rendering, 2-tier intent routing, pipelined
+> indexing with background reconciliation and ephemeral scopes, read-only one-shot CLI commands,
+> an interactive Bubble Tea TUI, and a full benchmark evaluation harness (`vektix eval`). See
+> [Known gaps](#known-gaps) for minor deferred technical debt.
 
 ## What it is
 
@@ -21,8 +22,8 @@ edits, appends, deletes, or moves anything, and it never calls out to a cloud AP
 
 Output is the real bytes from your files — the retrieved chunk expanded to a natural boundary
 (paragraph, function, or top-level key) and printed with line numbers. No LLM-authored answers by
-default. An `[e]xplain` action is meant to exist as an explicit, opt-in escape hatch when you want
-prose, loading its model only on demand — this is planned but not implemented yet.
+default. An `[e]xplain` action exists as an explicit, opt-in escape hatch in the interactive TUI
+when you want prose, loading its model (`qwen2.5:3b-instruct`) only on demand.
 
 ## Core design idea
 
@@ -31,9 +32,9 @@ most queries can complete without loading a model at all:
 
 - **Router, Tier 1** — a guarded regex fast-path (`internal/router/fastpath.go`). A pattern like
   `^open\s+(.+)$` only fires if its captured argument passes a shape guard (looks like a path, a
-  glob, or a session reference). The guard exists because an unguarded `^find\s+(.+)$` would turn
-  *"find out what I wrote about docker"* into a glob of `out what I wrote about docker` — instant,
-  confident, and wrong.
+  glob, or an explicit session reference via `session.IsExplicitRef`). The guard prevents an
+  unguarded `^find\s+(.+)$` from turning *"find out what I wrote about docker"* into a glob of
+  `out what I wrote about docker` — instant, confident, and wrong.
 - **Router, Tier 2** — on a Tier-1 miss, `internal/router/llm.go` classifies intent with
   `qwen2.5:0.5b` under a full JSON Schema (`internal/router/schema.go`) passed as Ollama's `format`
   parameter, so the model's output is grammar-constrained to always be valid JSON.
@@ -56,9 +57,9 @@ on a document push it to the top.
 Paths are first-class search targets, not just content: *"open my resume pdf"* is a path query, and
 the path arm tokenises basename, stem, parent directories, and extension for fuzzy matching.
 
-## Scoped fetching
+## Scoped fetching & ephemeral indexing
 
-Launching Vektix inside a directory is meant to confine search to that subtree — a view over the
+Launching Vektix inside a directory confines search to that subtree — a view over the
 existing index, not a separate one. The path and BM25 arms filter **exactly** (`strings.HasPrefix`
 on the chunk's path, restricted to in-scope documents before ranking). The vector arm cannot be
 filtered that way: chromem-go's `where` clause is exact-match only, with no prefix or OR operator,
@@ -71,15 +72,26 @@ The workaround is adaptive oversampling with an in-memory prefix filter
 nResults = clamp(k / max(scopeFraction, oversample_floor), k, collectionSize)
 ```
 
-`scopeFraction` is meant to be an O(1) lookup against the manifest's `dir_counts` prefix tree
+`scopeFraction` is an O(1) lookup against the manifest's `dir_counts` prefix tree
 (`internal/index/manifest.go`). Query with `nResults`, filter the returned documents by path
 prefix in Go, and if fewer than `k` survive, retry once at full `collectionSize` — an exhaustive
 scan, since chromem-go is brute-force either way.
 
-Scope resolution itself (`internal/resolve/scope.go`) implements the ladder: explicit `--scope` or
-`--global` override, else CWD-under-an-indexed-root, else a signal to prompt the caller. The CLI
-flags and TUI status bar that are supposed to surface this are not wired up yet — see
-[Known gaps](#known-gaps).
+Scope resolution (`internal/resolve/scope.go`) implements the ladder: explicit `--scope` or
+`--global`/`-g` override, else CWD-under-an-indexed-root, else a signal to prompt the caller
+(or search globally with a clear notice in one-shot CLI mode).
+
+### Ephemeral indexing & background reconcile
+
+- **Ephemeral scope indexing**: When invoking search in an unindexed directory, passing `--index-now`
+  in the CLI (or using `:index-here` in the TUI) indexes the directory on demand as a transient root.
+- **LRU eviction policy**: Transient roots are retained for 7 days (`transient_retention_days`) up
+  to a maximum of 10 transient roots (`max_transient_roots`). When `vektix sync` runs, expired or
+  excess least-recently-used transient roots and their chunks are automatically purged from the
+  store and manifest.
+- **Background reconcile (TUI only)**: On startup, the TUI launches a non-blocking background check
+  via an asynchronous Bubble Tea command; if any indexed root has changed, it reconciles the index in
+  the background while keeping the query interface interactive.
 
 ## Models
 
@@ -87,7 +99,7 @@ flags and TUI status bar that are supposed to surface this are not wired up yet 
 |---|---|---|
 | Embeddings | `nomic-embed-text` | 768-dim. Requires task prefixes — see below. |
 | Intent (router Tier 2) | `qwen2.5:0.5b` | Schema-constrained decoding, `num_ctx=2048`. |
-| Explain (opt-in) | `qwen2.5:3b-instruct` | Not implemented yet; pulled on demand only when built. |
+| Explain (opt-in) | `qwen2.5:3b-instruct` | Used by the TUI `[e]xplain` action; loaded into Ollama on demand. |
 
 `nomic-embed-text` **requires** task prefixes — documents as `search_document: <text>`, queries as
 `search_query: <text>`. Omitting them degrades retrieval silently, with no error. The prefix is
@@ -97,30 +109,32 @@ raw text and an `IsQuery` bool.
 ## Manifest invalidation
 
 An index manifest (`internal/index/manifest.go`) records `{embedding_model, dim, prefix_scheme,
-chunker_version}` alongside the file → chunks map and the `dir_counts` prefix tree. `CheckValidity`
-compares these fields and returns `ErrManifestMismatch` on any mismatch — changing the embedding
-model must never silently mix incompatible vectors into one collection. Nothing in the tree yet
-calls `CheckValidity` from a live code path (no indexing pipeline exists to invoke it from); the
-check itself is implemented and unit-tested.
+chunker_version}` alongside the file → chunks map, the `dir_counts` prefix tree, and ephemeral
+scope metadata. `CheckValidity` compares these fields and returns `ErrManifestMismatch` on any
+mismatch — changing the embedding model must never silently mix incompatible vectors into one
+collection. The CLI (`cmd/vektix/oneshots.go`), indexer (`internal/index/sync.go`), and TUI
+(`internal/tui/app.go`) all verify manifest identity and refuse mismatched indexes with guidance
+to run `vektix reindex`.
 
 ## Safety
 
 - **Secrets denylist, enforced at read time** — `internal/fileops/safety.go`'s `ResolvePath` blocks
   `.ssh/`, `.gnupg/`, `.aws/credentials`, `*.pem`, `*.key`, and `.env*` regardless of where the path
   came from. Bypass is human-only: `allow_secrets = true` in `config.toml`, or the CLI's
-  `--unsafe` flag (not yet wired to any subcommand). There is no code path for a model to set it.
+  `--unsafe` flag. There is no code path for a model to set it.
 - **Path confinement** — every path is resolved through `filepath.EvalSymlinks` + `filepath.Abs`
   and, when `confine_to_roots = true`, confined to the configured index roots plus the invocation
-  CWD.
+  CWD (overridable with `--unsafe`).
 - **No write path** — the binary contains no code that creates, deletes, renames, or edits a user
-  file. `internal/fileops` only reads and shells out to an editor / `xdg-open`.
+  file. `internal/fileops` only reads and shells out to an editor / `xdg-open`. Indexing writes only
+  to `data_dir` (`manifest.json`, `quarantine.json`, and chromem-go store).
 - **Editor launch** — `$EDITOR` (or `cfg.General.Editor`) is tokenised with shell-quote-aware
   splitting (`internal/fileops/ops.go`'s `splitEditorCmd`) and passed to `exec.Command` as separate
   arguments, never through a shell, with a `--` separator before the path. Falls back to
   `xdg-open`, then to printing the path.
 - **PDF parsing is sandboxed** — `internal/parser/pdf.go` parses each PDF in its own goroutine with
-  `recover()` and respects the caller's context, so a malformed PDF (`ledongthuc/pdf` panics on
-  these) cannot abort a run.
+  `recover()` and respects the caller's context and timeout, so a malformed PDF (`ledongthuc/pdf` panics on
+  these) cannot abort an indexing run.
 
 ## Installation
 
@@ -137,13 +151,133 @@ make install       # go install ./cmd/vektix
 ## First run
 
 ```bash
-vektix setup   # checks Ollama is reachable, pulls nomic-embed-text and qwen2.5:0.5b if missing,
-               # creates ~/.local/share/vektix and a default ~/.config/vektix/config.toml
-vektix doctor  # checks config load, data dir, Ollama reachability, and required models
+# 1. Initialize data/config directories and pull required Ollama models
+vektix setup
+
+# 2. Check system health and Ollama connectivity
+vektix doctor
+
+# 3. Index your files and documents
+vektix index ~/Documents ~/notes ~/projects
+
+# 4. Launch the interactive TUI (or run one-shot CLI commands)
+vektix
 ```
 
-Both are fully implemented today; everything past this point in the CLI is a stub (see
-[Command reference](#command-reference)).
+## How to use
+
+Vektix provides two primary workflows: an interactive terminal interface (TUI) for exploratory
+search and natural-language interaction, and fast one-shot CLI commands for scripts and piping.
+
+### Interactive TUI
+
+Running `vektix` with no arguments when `stdout` is a terminal (TTY), or explicitly running `vektix tui`,
+launches the full-screen interactive Bubble Tea interface:
+
+```bash
+vektix                         # launches TUI scoped to CWD (or global if outside indexed roots)
+vektix tui --scope ~/projects  # launches TUI confined to a specific subtree
+vektix tui --global            # launches TUI searching across all indexed roots
+```
+
+#### Keybinds (when the input prompt is empty)
+
+| Key | Action | Description |
+|---|---|---|
+| `[o]` | Open | Open the active search result in your editor (`$EDITOR` or configured editor). |
+| `[c]` | Copy | Copy the active result's verbatim excerpt (or path) to clipboard. |
+| `[e]` | Explain | Stream an on-demand natural-language explanation of the passage via Ollama. |
+| `[n]` | Next | Cycle forward to the next candidate match from the last search. |
+| `[p]` | Prev | Cycle backward to the previous candidate match from the last search. |
+| `[g]` | Toggle Global | Toggle between subtree-scoped search and global search across all roots. |
+| `[tab]` | Picker | Open candidate picker modal to navigate and select from ambiguous matches. |
+| `[esc]` | Dismiss / Quit | Close active picker or indexing view, or quit Vektix. |
+| `Ctrl+C` | Quit | Immediate exit. |
+
+#### Colon commands
+
+Type `:` into the input box to run administrative and navigation commands:
+
+| Command | Description |
+|---|---|
+| `:scope <path>` | Switch active search scope to `<path>` (or `:scope global` / `-g`). |
+| `:global` | Switch active search scope to global. |
+| `:index [dir]` | Run live indexing pass on configured roots or a specific directory. |
+| `:index-here` (or `:index-transient`) | Index current working directory ephemerally as a transient root. |
+| `:sync` | Re-walk indexed roots, update modified files, purge orphans, and expire LRU transient roots. |
+| `:reindex` | Drop the existing collection and rebuild the index from scratch. |
+| `:status` | Display active search scope and indexed chunk statistics. |
+| `:clear` | Clear conversation history (capped at 200 entries) and reset session references. |
+| `:help` (or `:?`) | Show interactive command and keybind reference dialog. |
+| `:quit` (or `:q`, `:exit`) | Exit the TUI. |
+
+#### Session references
+
+The TUI maintains session context across consecutive queries (`internal/session/refs.go`), allowing
+natural-language references to previous search results:
+
+- Pronoun actions: `"open that"`, `"copy it"`, `"copy path"`, `"explain that"`
+- Ordinal references: `"open the second one"`, `"copy the first one"`, `"the third one"`
+- Direct index selectors: `#1`, `#2`, `2`, `last`, `"the last one"`
+- Demonstrative file qualifiers: `"that pdf"`, `"the go file"`, `"that server.go"`
+
+Changing the active scope (via `:scope`, `:global`, or `[g]`) automatically resets session references
+so subsequent actions never point to stale, differently-scoped results.
+
+#### On-demand explanation (`[e]xplain`)
+
+Pressing `[e]` (or typing `"explain that"`) in the TUI triggers an opt-in explanation of the active
+passage:
+- Uses `qwen2.5:3b-instruct` (configured via `cfg.Ollama.ExplainModel`), loaded into Ollama only on demand.
+- Stream idle timeout is configured via `cfg.Ollama.Timeouts.StreamIdleSeconds` (default: 30s; falls back to 60s if unset).
+- Context size is controlled by `cfg.Ollama.Context.ExplainNumCtx` (default: 8192).
+
+---
+
+### One-shot CLI commands
+
+Vektix commands can be run directly from the shell for fast lookups or script integration:
+
+```bash
+# Locate files by fuzzy path, keyword, or description
+$ vektix locate "postgres connection"
+scope: ~/projects/go/vektix (412 of 1,204 chunks) — --global searches everything
+ 1. pkg/db/pool.go  (path+bm25, rank 1)
+ 2. configs/database.json  (path, rank 2)
+
+# Excerpt matching passages with line numbers and syntax highlighting
+$ vektix excerpt "jwt authentication token"
+scope: ~/projects/go/vektix (412 of 1,204 chunks) — --global searches everything
+pkg/auth/jwt.go:14-26                                      (bm25+vec, rank 1)
+   14 | func ValidateToken(tokenString string) (*Claims, error) {
+   15 |     token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+   16 |         return jwtSecretKey, nil
+   17 |     })
+   18 |     if err != nil {
+   19 |         return nil, err
+   20 |     }
+   21 |     if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+   22 |         return claims, nil
+   23 |     }
+   24 |     return nil, ErrInvalidToken
+   25 | }
+
+  open: vektix open pkg/auth/jwt.go   copy: vektix copy pkg/auth/jwt.go
+
+# Open resolved file directly in your editor
+$ vektix open "jwt validation"
+opened /home/user/projects/go/vektix/pkg/auth/jwt.go
+
+# Copy passage or path directly to system clipboard
+$ vektix copy "jwt validation"
+copied pkg/auth/jwt.go:14-26 (wl-copy)
+
+# Read specific line ranges verbatim
+$ vektix read --lines 14-26 pkg/auth/jwt.go
+
+# Index an unindexed subtree ephemerally on the fly
+$ vektix locate --index-now "docker compose"
+```
 
 ## Configuration reference
 
@@ -160,7 +294,7 @@ scope_mode = "auto"                      # "auto" | "global" | "cwd"
 host            = "http://localhost:11434"
 embedding_model = "nomic-embed-text"     # 768-dim; changing this needs a reindex
 intent_model    = "qwen2.5:0.5b"
-explain_model   = "qwen2.5:3b-instruct"  # not yet used anywhere in the tree
+explain_model   = "qwen2.5:3b-instruct"  # used on demand by the TUI [e]xplain keybind
 keep_alive      = "5m"
 
 [ollama.timeouts]
@@ -173,19 +307,21 @@ intent_num_ctx  = 2048
 explain_num_ctx = 8192
 
 [index]
-index_dirs       = ["~/Documents", "~/notes", "~/projects"]
-extensions       = [".txt", ".md", ".pdf",
-                    ".go", ".py", ".js", ".ts", ".rs", ".sh", ".c", ".java",
-                    ".json", ".yaml", ".yml", ".toml"]
-max_file_size_mb = 50
-follow_symlinks  = false
+index_dirs               = ["~/Documents", "~/notes", "~/projects"]
+extensions               = [".txt", ".md", ".pdf",
+                            ".go", ".py", ".js", ".ts", ".rs", ".sh", ".c", ".java",
+                            ".json", ".yaml", ".yml", ".toml"]
+max_file_size_mb         = 50
+follow_symlinks          = false
+transient_retention_days = 7             # days to keep ephemeral scope indexes before LRU expiry
+max_transient_roots      = 10            # maximum number of ephemeral roots retained
 
 [index.exclude]
 dirs  = ["node_modules", ".git", "__pycache__", ".venv", "venv", ".cache",
-         ".trash", "dist", "build", "target", ".next", "vendor"]
+          ".trash", "dist", "build", "target", ".next", "vendor"]
 files = ["*.min.js", "*.min.css", "*.map", "*.lock", "*.sum", "*.exe", "*.bin",
-         "*.so", "*.dylib", "*.o", "*.pyc", "*.class", "*.wasm",
-         "package-lock.json", "yarn.lock"]
+          "*.so", "*.dylib", "*.o", "*.pyc", "*.class", "*.wasm",
+          "package-lock.json", "yarn.lock"]
 paths = ["~/Documents/archive/old-backups"]
 
 [search]
@@ -195,9 +331,9 @@ min_arms          = 1                    # minimum arms a result must appear in 
 oversample_floor  = 0.01                 # scoped vector oversampling clamp
 
 [chunking]
-max_tokens     = 256                     # DEAD — see Known gaps, has no effect
-overlap_tokens = 50                      # DEAD — see Known gaps, has no effect
-min_tokens     = 20                      # DEAD — see Known gaps, has no effect
+max_tokens     = 256                     # maximum tokens per chunk
+overlap_tokens = 50                      # token overlap between adjacent chunks
+min_tokens     = 20                      # minimum tokens for a trailing chunk
 
 [safety]
 confine_to_roots = true                  # deny reads outside index_dirs + CWD
@@ -210,62 +346,123 @@ binary/media/compiled extensions, `.git/`/`.hg/`/`.svn/`, OS junk files, and the
 
 ## Command reference
 
-Every subcommand `main()` dispatches to (`cmd/vektix/main.go`):
+Every subcommand `main()` dispatches to (`cmd/vektix/main.go` and `cmd/vektix/oneshots.go`):
 
 | Command | Status | Notes |
 |---|---|---|
-| `setup` | Implemented | Checks Ollama, pulls `embedding_model` and `intent_model` if missing, creates data/config dirs. |
+| `tui` | Implemented | Interactive Bubble Tea interface. Default when invoked with no arguments on a TTY. Flags: `--scope`, `--global`/`-g`. |
+| `setup` | Implemented | Checks Ollama reachability, pulls `embedding_model` and `intent_model` if missing, creates data/config dirs. |
 | `doctor` | Implemented | Checks config load, data dir existence, Ollama reachability, required models. |
-| `version` | Implemented | Prints the `-ldflags`-stamped version. |
-| `index <path>` | Stub | Flags `--dry-run`, `--exclude` are parsed but not acted on. |
-| `locate` | Stub | Flags `--scope`, `--global`/`-g` are parsed but not acted on. |
-| `read`, `excerpt`, `open`, `copy`, `list` | Stub | Print `not yet implemented` with the parsed args. |
-| `sync` | Stub | No indexing pipeline exists yet to reconcile against. |
-| `eval` | Implemented | Runs intent classification or locate retrieval benchmark evaluations against dataset files (`--dataset <path>`). |
+| `version` | Implemented | Prints the `-ldflags`-stamped version (or `-v`/`--version`). |
+| `index <path>` | Implemented | Walks, parses, chunks, embeds in batches, and indexes files into the store. Flags: `--dry-run`, `--exclude`. |
+| `locate <query>` | Implemented | Fast model-free search (fuzzy path + BM25, vector fallback); prints ranked files. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`, `--limit`. |
+| `read <path\|query>` | Implemented | Prints verbatim file content or line range (`path:A-B` or `--lines A-B`). Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `excerpt <query>` | Implemented | Natural boundary passage retrieval with line numbers, ANSI highlighting, and non-ASCII alignment. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`, `--no-color`, `--limit`. |
+| `open <path\|query>` | Implemented | Resolves target and launches `$EDITOR`/`cfg.General.Editor` or `xdg-open`. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `copy [path] <target>` | Implemented | Copies excerpt or path to clipboard via `wl-copy` → `xclip` → `xsel` → OSC 52. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `list [path]` | Implemented | Lists directory contents with file sizes and indexed chunk counts. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `sync [paths...]` | Implemented | Re-walks roots, indexes added/changed files, purges orphaned chunks of deleted or excluded files, and evicts expired LRU transient roots. |
+| `reindex [paths...]` | Implemented | Drops existing chunks under roots and rebuilds the collection from scratch. |
+| `status` | Implemented | Displays data directory, chunk/file counts, model identity, last sync timestamp, indexed roots, active scope, and quarantine list (text or `--json`). |
+| `eval` | Implemented | Runs intent classification or locate retrieval benchmark evaluations against dataset files (`--dataset <path>`). Flags: `--dataset`, `--corpus`, `--data-dir`, `--json`, `--limit`. |
 
-None of these stub commands touch `internal/resolve`, `internal/chunker`, `internal/excerpt`, or
-`internal/store` — those packages are implemented and unit-tested in isolation but nothing in
-`cmd/vektix` calls into them yet.
+All one-shot commands (`locate`, `read`, `excerpt`, `open`, `copy`, `list`, `status`, `eval`) support `--json`
+for pipe-clean machine-readable automation with zero ANSI escape codes on `stdout`.
+
+## Evaluation harness
+
+Vektix includes a built-in evaluation framework (`internal/eval`) for measuring intent classification
+and hybrid retrieval accuracy:
+
+```bash
+# Run locate retrieval benchmarks against testdata/locate_eval.jsonl using testdata/corpus/
+vektix eval
+
+# Run intent classification evaluation against testdata/intent_eval.jsonl
+vektix eval --dataset testdata/intent_eval.jsonl
+
+# Output metrics in JSON format for automated evaluation pipelines
+vektix eval --json
+```
+
+- **Auto-detection**: `vektix eval` inspects the dataset schema to determine whether it contains intent
+  classification queries (`input`, `expected`, `tier`) or locate retrieval queries (`query`, `expected_files`, `tier`).
+- **Isolated test corpus**: Locate evaluations index `testdata/corpus/` (~20 representative source, markdown, and config files)
+  into an isolated temporary store, ensuring benchmarks run independently of user data.
+- **Strict requirements**: Locate evaluations require a live Ollama service (`nomic-embed-text`); if indexing fails or produces
+  zero chunks, the evaluation fails immediately with a clear error rather than reporting misleading 0% metrics.
+- **Metrics reported**:
+  - **Intent**: Action Accuracy, Parameter Accuracy, Tier 1 Fast-Path Accuracy, Tier 2 LLM Accuracy, and Confusion Matrix.
+  - **Locate**: Hit@1, Hit@3, Hit@5, MRR@5, Mean Latency, and Arm Breakdown (Path, BM25, Vector, Fused).
 
 ## Project status
 
 Mapped against `plan.md`'s six phases:
 
-- **Phase 1 — Foundation & onboarding: done.** Config loading/defaults, the Ollama HTTP client with
+- **Phase 1 — Foundation & onboarding: done.** Config loading/defaults, Ollama HTTP client with
   per-type timeouts and explicit `num_ctx`, context budgeting (`internal/ollama/budget.go`),
-  `vektix setup`, `vektix doctor`.
-- **Phase 2 — Index: partially done.** The individual building blocks are implemented and tested —
-  symlink-safe walker with binary sniffing and cycle detection (`internal/index/walk.go`), the
-  three-layer `.vektixignore`/config/hardcoded exclusion system (`internal/index/ignore.go`),
-  text and panic-sandboxed PDF parsers (`internal/parser/`), the prose/code/structured chunkers
-  (`internal/chunker/`), the chromem-go store wrapper (`internal/store/`), and the manifest type
-  with `dir_counts`. **Missing:** nothing wires walk → parse → chunk → embed → store into an actual
-  pipeline, batched embedding calls are not orchestrated, and `vektix index` is a stub. The
-  manifest's `dir_counts` is never populated by anything in the tree today.
-- **Phase 3 — Resolve, scope & excerpt: mostly done as a library.** Path/trie fuzzy index, BM25,
-  vector arm with adaptive oversampling, RRF fusion, scope resolution, excerpt expansion
-  (paragraph/symbol/key boundaries) and rendering, path confinement and the secrets denylist are
-  all implemented with tests. **Missing:** none of it is reachable from the CLI — no `locate`,
-  `read`, `excerpt`, `open`, `copy`, or `list` command actually calls these packages.
-- **Phase 4 — Router: done as a library, not wired up.** Guarded regex fast-path with hijack
-  regression fixtures, schema-constrained Tier-2 classification. Clipboard
-  (`wl-copy`→`xclip`→`xsel`→OSC 52) is implemented. **Missing:** the CLI never calls the router; the
-  only caller today is `scripts/eval_intent.go` and the test suite.
-- **Phase 6 — Sync & polish: done.** `internal/index/sync.go` and `internal/session/refs.go`
-  are implemented with ordinal reference tracking and invalidation on scope changes. `internal/eval/` (`runner.go`, `metrics.go`, `eval_test.go`), `testdata/corpus/`, `testdata/locate_eval.jsonl`, and `vektix eval --dataset <path>` are implemented for automated intent and locate evaluations. Live Tier-2 intent evaluation and semantic vector locate evaluation connect to a running Ollama instance (`qwen2.5:0.5b` and `nomic-embed-text`).
+  `vektix setup`, `vektix doctor`, `vektix version`.
+- **Phase 2 — Index: done.** Symlink-safe walker with binary sniffing and cycle detection
+  (`internal/index/walk.go`), three-layer exclusion system (`internal/index/ignore.go`), text and
+  panic-sandboxed PDF parsers (`internal/parser/`), prose/code/structured chunkers with full config
+  threading (`internal/chunker/`), chromem-go store wrapper (`internal/store/`), full walk → parse →
+  chunk → embed → store pipeline (`internal/index/sync.go`), batched embedding calls (up to 100 texts/call),
+  quarantine tracking (`quarantine.json`), background reconciliation, ephemeral scope indexing with
+  LRU expiry, and manifest maintenance with the `dir_counts` prefix tree. `vektix index`, `sync`,
+  and `reindex` are fully operational.
+- **Phase 3 — Resolve, scope & excerpt: done.** Fuzzy path/trie index (`internal/resolve/paths.go`),
+  BM25 index (`internal/resolve/bm25.go`), vector arm with adaptive oversampling (`internal/resolve/vector.go`),
+  RRF fusion (`internal/resolve/fuse.go`), scope resolution ladder (`internal/resolve/scope.go`),
+  natural boundary excerpt expansion (`internal/excerpt/expand.go`), ANSI rendering with display width
+  runewidth calculations, tab expansion, PDF page gutter rendering, and `--no-color` support with non-TTY
+  auto-detection (`internal/excerpt/render.go`), and path confinement / secrets denylist safety enforcement (`internal/fileops/safety.go`).
+  Fully wired to CLI one-shot commands (`locate`, `read`, `excerpt`, `open`, `copy`, `list`) and the TUI.
+- **Phase 4 — Router: done.** Guarded regex fast-path (Tier 1) with shape guards and session reference
+  detection reuse (`internal/router/fastpath.go`), 100+ hijack regression tests across all patterns
+  (`internal/router/router_test.go`), schema-constrained Tier-2 classification via `qwen2.5:0.5b`
+  (`internal/router/llm.go`, `internal/router/schema.go`), and clipboard fallback chain (`internal/clipboard/copy.go`).
+  Fully integrated into the TUI query loop for automatic action routing (`open`, `read`, `list`, `locate`, `copy`, `excerpt`).
+- **Phase 5 — TUI: done.** Interactive Bubble Tea TUI (`internal/tui/`), query loop with 2-tier router
+  integration, verbatim excerpt rendering, ambiguous candidate picker (`[tab]`), active scope status bar,
+  indexing progress card with `bubbles/spinner` and live stats, on-demand passage explanation (`[e]` via `explain_model`),
+  next/prev match cycling (`[n]`/`[p]`), capped chat history window (200 entries), batch chunk loading via `store.GetByIDs`,
+  and session ordinal reference resolution.
+- **Phase 6 — Sync & polish: done.** `internal/index/sync.go` (reconciliation pass, orphan chunk purging,
+  ephemeral scope LRU expiry, quarantine persistence) and `internal/session/refs.go` (session ordinal
+  references with scope-change invalidation) are complete. `internal/eval/` (`runner.go`, `metrics.go`),
+  `testdata/corpus/`, `testdata/locate_eval.jsonl`, `testdata/intent_eval.jsonl`, and the `vektix eval` CLI command
+  are fully implemented.
+
+## Known gaps
+
+Documented honestly for future polish and refactoring:
+
+1. **Explain model literal duplication** — The default model string `"qwen2.5:3b-instruct"` is duplicated as a
+   hardcoded string literal fallback in both `internal/tui/app.go` and `internal/tui/chat.go` instead of referencing
+   a shared constant.
+2. **Status bar scope badge omits index errors** — `internal/tui/status.go`'s `RenderStatusBar` hand-rolls its own
+   scope-badge branching (`!st.HasIndex` renders `"no index"`) rather than calling `ScopeState.Banner()`, silently
+   omitting `st.IndexError` when an index fails to load.
+3. **`scopePinned` not updated on `:scope`** — `AppModel.scopePinned` only stores the initial `--scope` CLI flag
+   and is not updated when the active scope changes via `:scope <path>`, causing the `[g]` keybind toggle to revert
+   to the startup directory rather than the latest user-selected scope.
+4. **Duplicate struct mapping blocks** — `SearchResult` fields are manually copied into `session.Item` and `PickerItem`
+   across multiple call sites in `internal/tui/app.go` rather than sharing conversion methods.
+5. **Repeated session reference classification** — `session.ResolveRef` re-evaluates pronoun and ordinal regex/map
+   rules rather than reusing parsed tokens from `session.IsExplicitRef`.
+6. **Duplicate history backward-scan loops** — `internal/tui/app.go` repeats the reverse loop searching for the latest
+   search entry across four distinct helper methods (`setActiveResultIndex`, `triggerCycleMatch`, `triggerOpenPicker`,
+   `getActiveItem`).
+7. **Hardcoded keybind dispatch** — Single-key navigation in `internal/tui/app.go` uses a hardcoded switch statement
+   instead of a data-driven keymap (e.g. `bubbles/key`).
 
 ## Development tooling
 
-`scripts/` holds two dev-only tools, not part of the `vektix` binary:
+`scripts/` holds dev-only tools for generating datasets:
 
-- `scripts/gen_cases.py` generates `testdata/intent_eval.jsonl`. Run with `python3
-  scripts/gen_cases.py` from the repo root.
-- `scripts/eval_intent.go` is a standalone `package main` that runs every case in
-  `testdata/intent_eval.jsonl` through the real router (Tier 1 fast-path, falling through to a
-  **live** Tier 2 LLM call) and prints action/parameter accuracy. It requires Ollama running
-  locally with `qwen2.5:0.5b` pulled. Run with `go run ./scripts/eval_intent.go` from the repo
-  root (it opens `testdata/intent_eval.jsonl` via a relative path). This exists because
-  `internal/eval` and `vektix eval` are not implemented yet.
+- `scripts/gen_cases.py` generates `testdata/intent_eval.jsonl`. Run with `python3 scripts/gen_cases.py` from the repo root.
+- `scripts/eval_intent.go` is a legacy standalone harness that runs `testdata/intent_eval.jsonl` through the router.
+  It is largely superseded by the built-in CLI command: `vektix eval --dataset testdata/intent_eval.jsonl`.
 
 ## Build & test
 
