@@ -9,7 +9,8 @@ Single static Go binary. No CGO. Go 1.23.0.
 > **Status:** complete. All six phases of the design specification (`plan.md`) are implemented
 > and tested: hybrid retrieval, chunking, excerpt rendering, 2-tier intent routing, pipelined
 > indexing with background reconciliation and ephemeral scopes, read-only one-shot CLI commands,
-> an interactive Bubble Tea TUI, and a full benchmark evaluation harness (`vektix eval`).
+> an interactive Bubble Tea TUI, and a full benchmark evaluation harness (`vektix eval`). See
+> [Known gaps](#known-gaps) for minor deferred technical debt.
 
 ## What it is
 
@@ -431,6 +432,29 @@ Mapped against `plan.md`'s six phases:
   references with scope-change invalidation) are complete. `internal/eval/` (`runner.go`, `metrics.go`),
   `testdata/corpus/`, `testdata/locate_eval.jsonl`, `testdata/intent_eval.jsonl`, and the `vektix eval` CLI command
   are fully implemented.
+
+## Known gaps
+
+Documented honestly for future polish and refactoring:
+
+1. **Explain model literal duplication** — The default model string `"qwen2.5:3b-instruct"` is duplicated as a
+   hardcoded string literal fallback in both `internal/tui/app.go` and `internal/tui/chat.go` instead of referencing
+   a shared constant.
+2. **Status bar scope badge omits index errors** — `internal/tui/status.go`'s `RenderStatusBar` hand-rolls its own
+   scope-badge branching (`!st.HasIndex` renders `"no index"`) rather than calling `ScopeState.Banner()`, silently
+   omitting `st.IndexError` when an index fails to load.
+3. **`scopePinned` not updated on `:scope`** — `AppModel.scopePinned` only stores the initial `--scope` CLI flag
+   and is not updated when the active scope changes via `:scope <path>`, causing the `[g]` keybind toggle to revert
+   to the startup directory rather than the latest user-selected scope.
+4. **Duplicate struct mapping blocks** — `SearchResult` fields are manually copied into `session.Item` and `PickerItem`
+   across multiple call sites in `internal/tui/app.go` rather than sharing conversion methods.
+5. **Repeated session reference classification** — `session.ResolveRef` re-evaluates pronoun and ordinal regex/map
+   rules rather than reusing parsed tokens from `session.IsExplicitRef`.
+6. **Duplicate history backward-scan loops** — `internal/tui/app.go` repeats the reverse loop searching for the latest
+   search entry across four distinct helper methods (`setActiveResultIndex`, `triggerCycleMatch`, `triggerOpenPicker`,
+   `getActiveItem`).
+7. **Hardcoded keybind dispatch** — Single-key navigation in `internal/tui/app.go` uses a hardcoded switch statement
+   instead of a data-driven keymap (e.g. `bubbles/key`).
 
 ## Development tooling
 
