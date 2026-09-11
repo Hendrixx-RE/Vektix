@@ -132,6 +132,12 @@ func (w *Walker) isAllowedFile(path string, info fs.FileInfo) bool {
 		return false
 	}
 
+	// PDF is a binary container format with its own parser downstream;
+	// the text/UTF-8 sniff below would reject virtually every PDF.
+	if ext == ".pdf" {
+		return true
+	}
+
 	// Binary sniff (first 8KB)
 	file, err := os.Open(path)
 	if err != nil {

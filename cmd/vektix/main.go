@@ -41,6 +41,7 @@ func isTUIFlag(cmd string) bool {
 
 func main() {
 	if len(os.Args) < 2 {
+		// tui or not
 		if isTTY() {
 			tuiCmd(nil)
 			return
@@ -258,7 +259,7 @@ func setupCmd(args []string) {
 		os.Exit(1)
 	}
 
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		fmt.Printf("Error creating data_dir %s: %v\n", dataDir, err)
 		os.Exit(1)
 	}
@@ -266,7 +267,7 @@ func setupCmd(args []string) {
 
 	configDir, err := config.GetConfigDir()
 	if err == nil {
-		if err := os.MkdirAll(configDir, 0755); err == nil {
+		if err := os.MkdirAll(configDir, 0o755); err == nil {
 			configPath := filepath.Join(configDir, "config.toml")
 			if _, err := os.Stat(configPath); os.IsNotExist(err) {
 				fmt.Printf("✓ Created default config file at %s\n", configPath)
@@ -446,7 +447,7 @@ func runIndex(cfg config.Config, roots []string, mode index.Mode, dryRun bool) {
 		cli index.Embedder
 	)
 	if !dryRun {
-		if err := os.MkdirAll(dataDir, 0755); err != nil {
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
 			fmt.Printf("Error creating data_dir %s: %v\n", dataDir, err)
 			os.Exit(1)
 		}
@@ -627,4 +628,3 @@ func evalCmd(args []string) {
 		os.Exit(1)
 	}
 }
-
