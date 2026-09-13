@@ -210,19 +210,19 @@ func (m IndexModel) View(width int, theme Theme) string {
 		rows = append(rows, "")
 		rows = append(rows, theme.KeyHintDesc.Render("Press [esc] to cancel"))
 	} else if m.Err != nil {
-		rows = append(rows, theme.ErrorText.Render(fmt.Sprintf("✗ %s failed: %v", modeName, m.Err)))
+		rows = append(rows, theme.ErrorText.Render(fmt.Sprintf("[FAIL] %s failed: %v", modeName, m.Err)))
 		rows = append(rows, "")
 		rows = append(rows, theme.KeyHintDesc.Render("Press [esc] or [enter] to return"))
 	} else if m.Result != nil {
 		res := m.Result
-		rows = append(rows, theme.SuccessText.Render(fmt.Sprintf("✓ %s complete (%s)", modeName, format.FormatDuration(m.Elapsed))))
+		rows = append(rows, theme.SuccessText.Render(fmt.Sprintf("[OK] %s complete (%s)", modeName, format.FormatDuration(m.Elapsed))))
 		rows = append(rows, "")
 
 		summary := fmt.Sprintf("Scanned %s files — %d added, %d updated, %d unchanged, %d removed (%s chunks)",
 			format.HumanInt(len(res.Files)+res.Unchanged), res.Added, res.Updated, res.Unchanged, res.Removed, format.HumanInt(res.Chunks))
 		rows = append(rows, theme.UserInput.Render(summary))
 		if len(res.Quarantined) > 0 {
-			rows = append(rows, theme.WarningText.Render(fmt.Sprintf("⚠ %d file(s) quarantined (malformed/unreadable)", len(res.Quarantined))))
+			rows = append(rows, theme.WarningText.Render(fmt.Sprintf("[WARN] %d file(s) quarantined (malformed/unreadable)", len(res.Quarantined))))
 		}
 		rows = append(rows, "")
 		rows = append(rows, theme.KeyHintDesc.Render("Press [esc] or [enter] to return to query"))

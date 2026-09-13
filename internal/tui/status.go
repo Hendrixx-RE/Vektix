@@ -52,16 +52,27 @@ func (s ScopeState) Banner() string {
 }
 
 // ResolveScopeState resolves the active scope using the config, cwd, and root hierarchy.
-func ResolveScopeState(cfg *config.Config, cwd, scopeOverride string, global bool, totalChunks int, countFn func(scope string) int) ScopeState {
+func ResolveScopeState(cfg *config.Config, cwd, scopeOverride string, global bool, totalChunks int, countFn func(scope string) int, manifestRoots ...string) ScopeState {
 	st := ScopeState{
 		Total:    totalChunks,
 		HasIndex: totalChunks > 0,
 	}
 
-	roots := make([]string, 0, len(cfg.Index.IndexDirs))
+	seen := make(map[string]bool)
+	roots := make([]string, 0, len(cfg.Index.IndexDirs)+len(manifestRoots))
 	for _, r := range cfg.Index.IndexDirs {
-		if exp, err := config.ExpandPath(r); err == nil {
+		if exp, err := config.ExpandPath(r); err == nil && !seen[exp] {
+			seen[exp] = true
 			roots = append(roots, exp)
+		}
+	}
+	// Roots indexed directly (e.g. `vektix index <dir>`) live only in the
+	// manifest, not in config.toml's index_dirs — include them too so scope
+	// auto-detection recognizes CWDs under them.
+	for _, r := range manifestRoots {
+		if !seen[r] {
+			seen[r] = true
+			roots = append(roots, r)
 		}
 	}
 
@@ -88,7 +99,7 @@ func ResolveScopeState(cfg *config.Config, cwd, scopeOverride string, global boo
 
 // RenderStatusBar renders the top status bar containing the logo, active scope, and global toggle hint.
 func RenderStatusBar(width int, st ScopeState, theme Theme) string {
-	logo := theme.Title.Render("🔷 VEKTIX")
+	logo := theme.Title.Render("VEKTIX")
 
 	var scopeBadge string
 	if !st.HasIndex {

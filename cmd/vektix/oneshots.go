@@ -341,10 +341,23 @@ type activeScope struct {
 func (e *env) resolveActiveScope(fl *oneShotFlags) *activeScope {
 	sc := &activeScope{}
 
+	seen := make(map[string]bool)
 	roots := make([]string, 0, len(e.cfg.Index.IndexDirs))
 	for _, r := range e.cfg.Index.IndexDirs {
-		if exp, err := config.ExpandPath(r); err == nil {
+		if exp, err := config.ExpandPath(r); err == nil && !seen[exp] {
+			seen[exp] = true
 			roots = append(roots, exp)
+		}
+	}
+	// Roots indexed directly (e.g. `vektix index <dir>`) live only in the
+	// manifest, not in config.toml's index_dirs — include them too so scope
+	// auto-detection recognizes CWDs under them.
+	if m, err := index.LoadManifest(index.ManifestPath(e.dataDir)); err == nil {
+		for _, r := range m.Roots {
+			if !seen[r] {
+				seen[r] = true
+				roots = append(roots, r)
+			}
 		}
 	}
 
@@ -1283,7 +1296,7 @@ func (e *env) resolveTarget(fl *oneShotFlags, sc *activeScope, cmd, arg string, 
 	}
 
 	if !fl.jsonOut {
-		fmt.Fprintf(e.stderr, "resolved %q → %s %s\n", arg, format.DisplayPath(safe), top.armLabel())
+		fmt.Fprintf(e.stderr, "resolved %q -> %s %s\n", arg, format.DisplayPath(safe), top.armLabel())
 		others := dedupeByPath(strong)
 		if len(others) > 1 {
 			fmt.Fprint(e.stderr, "other candidates in scope: ")

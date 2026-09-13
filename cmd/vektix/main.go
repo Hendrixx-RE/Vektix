@@ -239,7 +239,7 @@ func pullModel(host, modelName string) error {
 		fmt.Printf("\r%s\r%s", strings.Repeat(" ", lastLen), msg)
 		lastLen = len(msg)
 	}
-	fmt.Printf("\n✓ Pulled %s successfully\n", modelName)
+	fmt.Printf("\n[OK] Pulled %s successfully\n", modelName)
 	return nil
 }
 
@@ -250,7 +250,7 @@ func setupCmd(args []string) {
 	if err != nil {
 		fmt.Printf("Warning: Failed to load config: %v\n", err)
 	} else {
-		fmt.Println("✓ Config loaded successfully")
+		fmt.Println("[OK] Config loaded successfully")
 	}
 
 	dataDir, err := config.ExpandPath(cfg.General.DataDir)
@@ -263,28 +263,28 @@ func setupCmd(args []string) {
 		fmt.Printf("Error creating data_dir %s: %v\n", dataDir, err)
 		os.Exit(1)
 	}
-	fmt.Printf("✓ Data directory ready (%s)\n", dataDir)
+	fmt.Printf("[OK] Data directory ready (%s)\n", dataDir)
 
 	configDir, err := config.GetConfigDir()
 	if err == nil {
 		if err := os.MkdirAll(configDir, 0o755); err == nil {
 			configPath := filepath.Join(configDir, "config.toml")
 			if _, err := os.Stat(configPath); os.IsNotExist(err) {
-				fmt.Printf("✓ Created default config file at %s\n", configPath)
+				fmt.Printf("[OK] Created default config file at %s\n", configPath)
 			}
 		}
 	}
 
 	fmt.Println("Checking Ollama...")
 	if err := checkOllamaReachable(cfg.Ollama.Host); err != nil {
-		fmt.Printf("✗ Ollama not reachable at %s\n", cfg.Ollama.Host)
+		fmt.Printf("[FAIL] Ollama not reachable at %s\n", cfg.Ollama.Host)
 		fmt.Println("  Please install Ollama (https://ollama.com) and start it before running setup.")
 		os.Exit(1)
 	}
-	fmt.Printf("✓ Ollama reachable at %s\n", cfg.Ollama.Host)
+	fmt.Printf("[OK] Ollama reachable at %s\n", cfg.Ollama.Host)
 
 	fmt.Println("Checking required models...")
-	models := []string{cfg.Ollama.EmbeddingModel, cfg.Ollama.IntentModel}
+	models := []string{cfg.Ollama.EmbeddingModel, cfg.Ollama.IntentModel, cfg.Ollama.ExplainModel}
 	for _, model := range models {
 		has, err := checkOllamaModel(cfg.Ollama.Host, model)
 		if err != nil {
@@ -297,7 +297,7 @@ func setupCmd(args []string) {
 				os.Exit(1)
 			}
 		} else {
-			fmt.Printf("✓ Model %s is already present\n", model)
+			fmt.Printf("[OK] Model %s is already present\n", model)
 		}
 	}
 
@@ -315,41 +315,41 @@ func doctorCmd(args []string) {
 	cfg, err := config.Load()
 	exitCode := 0
 	if err != nil {
-		fmt.Printf("✗ Config: Failed to load: %v\n", err)
+		fmt.Printf("[FAIL] Config: Failed to load: %v\n", err)
 		exitCode = 1
 	} else {
-		fmt.Println("✓ Config: Loaded successfully")
+		fmt.Println("[OK] Config: Loaded successfully")
 	}
 
 	dataDir, err := config.ExpandPath(cfg.General.DataDir)
 	if err != nil {
-		fmt.Printf("✗ Data Directory: Error resolving path: %v\n", err)
+		fmt.Printf("[FAIL] Data Directory: Error resolving path: %v\n", err)
 		exitCode = 1
 	} else if _, err := os.Stat(dataDir); os.IsNotExist(err) {
-		fmt.Printf("✗ Data Directory: %s does not exist\n", dataDir)
+		fmt.Printf("[FAIL] Data Directory: %s does not exist\n", dataDir)
 		exitCode = 1
 	} else {
-		fmt.Printf("✓ Data Directory: %s exists\n", dataDir)
+		fmt.Printf("[OK] Data Directory: %s exists\n", dataDir)
 	}
 
 	if err := checkOllamaReachable(cfg.Ollama.Host); err != nil {
-		fmt.Printf("✗ Ollama: Not reachable at %s\n", cfg.Ollama.Host)
+		fmt.Printf("[FAIL] Ollama: Not reachable at %s\n", cfg.Ollama.Host)
 		fmt.Println("  Please install Ollama (https://ollama.com) and ensure it is running.")
 		exitCode = 1
 	} else {
-		fmt.Printf("✓ Ollama: Reachable at %s\n", cfg.Ollama.Host)
+		fmt.Printf("[OK] Ollama: Reachable at %s\n", cfg.Ollama.Host)
 
-		models := []string{cfg.Ollama.EmbeddingModel, cfg.Ollama.IntentModel}
+		models := []string{cfg.Ollama.EmbeddingModel, cfg.Ollama.IntentModel, cfg.Ollama.ExplainModel}
 		for _, model := range models {
 			has, err := checkOllamaModel(cfg.Ollama.Host, model)
 			if err != nil {
-				fmt.Printf("✗ Models: Error checking %s: %v\n", model, err)
+				fmt.Printf("[FAIL] Models: Error checking %s: %v\n", model, err)
 				exitCode = 1
 			} else if !has {
-				fmt.Printf("✗ Models: Missing %s. Run 'vektix setup' to install.\n", model)
+				fmt.Printf("[FAIL] Models: Missing %s. Run 'vektix setup' to install.\n", model)
 				exitCode = 1
 			} else {
-				fmt.Printf("✓ Models: Found %s\n", model)
+				fmt.Printf("[OK] Models: Found %s\n", model)
 			}
 		}
 	}

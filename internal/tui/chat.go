@@ -75,7 +75,7 @@ func RenderChat(entries []ChatEntry, width int, theme Theme) string {
 				block = append(block, theme.ErrorText.Render(entry.ErrorMsg))
 			}
 
-			// Success (e.g. ✓ opened main.go:88 in nvim)
+			// Success (e.g. "opened main.go:88 in nvim")
 			if entry.SuccessMsg != "" {
 				block = append(block, theme.SuccessText.Render(entry.SuccessMsg))
 			}
@@ -94,7 +94,7 @@ func RenderChat(entries []ChatEntry, width int, theme Theme) string {
 				})
 				block = append(block, renderedExcerpt)
 
-				// Action bar: [o]pen  [c]opy  [e]xplain  [n]ext match (X more)
+				// Action bar: [^o] open  [^y] copy  [^e] explain  [^n] next match (X more)
 				actionBar := RenderActionBar(entry, theme)
 				block = append(block, actionBar)
 			}
@@ -105,7 +105,7 @@ func RenderChat(entries []ChatEntry, width int, theme Theme) string {
 				if modelName == "" {
 					modelName = "qwen2.5:3b-instruct"
 				}
-				loading := fmt.Sprintf("⚡ Explaining with %s (loaded on demand)...", modelName)
+				loading := fmt.Sprintf("Explaining with %s (loaded on demand)...", modelName)
 				block = append(block, theme.WarningText.Render(loading))
 			}
 
@@ -113,7 +113,7 @@ func RenderChat(entries []ChatEntry, width int, theme Theme) string {
 				explainBox := theme.ExcerptBorder.Width(width - 4).Render(
 					lipgloss.JoinVertical(
 						lipgloss.Left,
-						theme.ExplainHeader.Render("📝 Explanation:"),
+						theme.ExplainHeader.Render("Explanation:"),
 						"",
 						theme.ExplainContent.Render(entry.ExplainContent),
 					),
@@ -130,7 +130,7 @@ func RenderChat(entries []ChatEntry, width int, theme Theme) string {
 	return strings.Join(sections, "\n\n")
 }
 
-// RenderActionBar renders the [o]pen [c]opy [e]xplain [n]ext keybind footer.
+// RenderActionBar renders the [^o]open [^y]copy [^e]explain [^n]next keybind footer.
 func RenderActionBar(entry ChatEntry, theme Theme) string {
 	moreCount := len(entry.Results) - 1
 	var moreLabel string
@@ -144,7 +144,7 @@ func RenderActionBar(entry ChatEntry, theme Theme) string {
 	btn := func(key, name string) string {
 		return lipgloss.JoinHorizontal(
 			lipgloss.Left,
-			theme.KeyHintBracket.Render("["),
+			theme.KeyHintBracket.Render("[^"),
 			theme.ActionKey.Render(key),
 			theme.KeyHintBracket.Render("]"),
 			theme.ActionLabel.Render(name),
@@ -152,10 +152,10 @@ func RenderActionBar(entry ChatEntry, theme Theme) string {
 	}
 
 	items := []string{
-		btn("o", "pen"),
-		btn("c", "opy"),
-		btn("e", "xplain"),
-		btn("n", "ext"),
+		btn("o", " open"),
+		btn("y", " copy"),
+		btn("e", " explain"),
+		btn("n", " next"),
 	}
 
 	bar := strings.Join(items, "  ")
@@ -168,7 +168,7 @@ func RenderActionBar(entry ChatEntry, theme Theme) string {
 
 func renderWelcomeMessage(width int, theme Theme) string {
 	var lines []string
-	lines = append(lines, theme.Title.Render("🔷 Vektix — Natural Language File Locator & Passage Retrieval"))
+	lines = append(lines, theme.Title.Render("Vektix — Natural Language File Locator & Passage Retrieval"))
 	lines = append(lines, theme.KeyHintDesc.Render("Ask in plain English, or use quick actions:"))
 	lines = append(lines, "")
 	lines = append(lines, "  • "+theme.UserQueryEcho.Render("where is my resume")+"           "+theme.KeyHintDesc.Render("(locate by name or content)"))

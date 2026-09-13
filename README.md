@@ -109,7 +109,7 @@ raw text and an `IsQuery` bool.
 ## Manifest invalidation
 
 An index manifest (`internal/index/manifest.go`) records `{embedding_model, dim, prefix_scheme,
-chunker_version}` alongside the file → chunks map, the `dir_counts` prefix tree, and ephemeral
+chunker_version}` alongside the file -> chunks map, the `dir_counts` prefix tree, and ephemeral
 scope metadata. `CheckValidity` compares these fields and returns `ErrManifestMismatch` on any
 mismatch — changing the embedding model must never silently mix incompatible vectors into one
 collection. The CLI (`cmd/vektix/oneshots.go`), indexer (`internal/index/sync.go`), and TUI
@@ -180,18 +180,21 @@ vektix tui --scope ~/projects  # launches TUI confined to a specific subtree
 vektix tui --global            # launches TUI searching across all indexed roots
 ```
 
-#### Keybinds (when the input prompt is empty)
+#### Keybinds
+
+Result-action shortcuts use `Ctrl` so they never collide with normal typing in the input box —
+a bare letter is always just a letter.
 
 | Key | Action | Description |
 |---|---|---|
-| `[o]` | Open | Open the active search result in your editor (`$EDITOR` or configured editor). |
-| `[c]` | Copy | Copy the active result's verbatim excerpt (or path) to clipboard. |
-| `[e]` | Explain | Stream an on-demand natural-language explanation of the passage via Ollama. |
-| `[n]` | Next | Cycle forward to the next candidate match from the last search. |
-| `[p]` | Prev | Cycle backward to the previous candidate match from the last search. |
-| `[g]` | Toggle Global | Toggle between subtree-scoped search and global search across all roots. |
-| `[tab]` | Picker | Open candidate picker modal to navigate and select from ambiguous matches. |
-| `[esc]` | Dismiss / Quit | Close active picker or indexing view, or quit Vektix. |
+| `Ctrl+O` | Open | Open the active search result in your editor (`$EDITOR` or configured editor). |
+| `Ctrl+Y` | Copy | Copy the active result's verbatim excerpt (or path) to clipboard. |
+| `Ctrl+E` | Explain | Stream an on-demand natural-language explanation of the passage via Ollama. |
+| `Ctrl+N` | Next | Cycle forward to the next candidate match from the last search. |
+| `Ctrl+P` | Prev | Cycle backward to the previous candidate match from the last search. |
+| `Ctrl+G` | Toggle Global | Toggle between subtree-scoped search and global search across all roots. |
+| `[tab]` | Picker | Open candidate picker modal to navigate and select from ambiguous matches (input prompt must be empty). |
+| `[esc]` | Dismiss / Quit | Close active picker or indexing view, or quit Vektix (input prompt must be empty). |
 | `Ctrl+C` | Quit | Immediate exit. |
 
 #### Colon commands
@@ -359,7 +362,7 @@ Every subcommand `main()` dispatches to (`cmd/vektix/main.go` and `cmd/vektix/on
 | `read <path\|query>` | Implemented | Prints verbatim file content or line range (`path:A-B` or `--lines A-B`). Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
 | `excerpt <query>` | Implemented | Natural boundary passage retrieval with line numbers, ANSI highlighting, and non-ASCII alignment. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`, `--no-color`, `--limit`. |
 | `open <path\|query>` | Implemented | Resolves target and launches `$EDITOR`/`cfg.General.Editor` or `xdg-open`. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
-| `copy [path] <target>` | Implemented | Copies excerpt or path to clipboard via `wl-copy` → `xclip` → `xsel` → OSC 52. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
+| `copy [path] <target>` | Implemented | Copies excerpt or path to clipboard via `wl-copy` -> `xclip` -> `xsel` -> OSC 52. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
 | `list [path]` | Implemented | Lists directory contents with file sizes and indexed chunk counts. Flags: `--scope`, `--global`/`-g`, `--json`, `--unsafe`, `--index-now`. |
 | `sync [paths...]` | Implemented | Re-walks roots, indexes added/changed files, purges orphaned chunks of deleted or excluded files, and evicts expired LRU transient roots. |
 | `reindex [paths...]` | Implemented | Drops existing chunks under roots and rebuilds the collection from scratch. |
@@ -405,8 +408,8 @@ Mapped against `plan.md`'s six phases:
 - **Phase 2 — Index: done.** Symlink-safe walker with binary sniffing and cycle detection
   (`internal/index/walk.go`), three-layer exclusion system (`internal/index/ignore.go`), text and
   panic-sandboxed PDF parsers (`internal/parser/`), prose/code/structured chunkers with full config
-  threading (`internal/chunker/`), chromem-go store wrapper (`internal/store/`), full walk → parse →
-  chunk → embed → store pipeline (`internal/index/sync.go`), batched embedding calls (up to 100 texts/call),
+  threading (`internal/chunker/`), chromem-go store wrapper (`internal/store/`), full walk -> parse ->
+  chunk -> embed -> store pipeline (`internal/index/sync.go`), batched embedding calls (up to 100 texts/call),
   quarantine tracking (`quarantine.json`), background reconciliation, ephemeral scope indexing with
   LRU expiry, and manifest maintenance with the `dir_counts` prefix tree. `vektix index`, `sync`,
   and `reindex` are fully operational.

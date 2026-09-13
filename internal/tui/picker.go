@@ -174,7 +174,7 @@ func (p PickerModel) View(width int, theme Theme) string {
 	hint := lipgloss.JoinHorizontal(
 		lipgloss.Left,
 		theme.KeyHintBracket.Render("["),
-		theme.KeyHintKey.Render("↑/↓"),
+		theme.KeyHintKey.Render("up/down"),
 		theme.KeyHintBracket.Render("]"),
 		" navigate   ",
 		theme.KeyHintBracket.Render("["),

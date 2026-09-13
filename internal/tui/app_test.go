@@ -143,23 +143,23 @@ func TestApp_SearchResultsAndActions(t *testing.T) {
 		t.Fatalf("expected 2 session items, got %d", app.sessionRefs.Count())
 	}
 
-	// Test hotkey 'o' (open current)
+	// Test hotkey ctrl+o (open current)
 	app.input.SetValue("")
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	if *openedPath != "/path/to/server.go" {
 		t.Errorf("expected open /path/to/server.go, got %s", *openedPath)
 	}
 
-	// Test hotkey 'c' (copy current excerpt)
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	// Test hotkey ctrl+y (copy current excerpt)
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlY})
 	if !strings.Contains(*copiedText, "func StartServer()") {
 		t.Errorf("expected copied excerpt text, got %q", *copiedText)
 	}
 
-	// Test hotkey 'n' (cycle to next match)
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	// Test hotkey ctrl+n (cycle to next match)
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	// Now active index should be 1 (/path/to/client.go)
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	if *openedPath != "/path/to/client.go" {
 		t.Errorf("expected open /path/to/client.go after cycle, got %s", *openedPath)
 	}
@@ -227,7 +227,7 @@ func TestApp_PickerIntegration(t *testing.T) {
 	}
 
 	// Verify active index is now 1
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	if *openedPath != "/path/to/two.go" {
 		t.Errorf("expected open /path/to/two.go after picker select, got %s", *openedPath)
 	}
@@ -236,10 +236,10 @@ func TestApp_PickerIntegration(t *testing.T) {
 func TestApp_GlobalToggleKey(t *testing.T) {
 	app, _, _ := newTestApp(t)
 
-	// Press 'g' when input is empty to toggle global
+	// Press ctrl+g to toggle global
 	app.input.SetValue("")
 	wasGlobal := app.getScopeState().Global
-	app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	app.Update(tea.KeyMsg{Type: tea.KeyCtrlG})
 
 	if app.getScopeState().Global == wasGlobal {
 		t.Errorf("expected scope global state to toggle after 'g'")

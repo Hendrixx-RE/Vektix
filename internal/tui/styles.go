@@ -2,19 +2,11 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Theme holds the shared Lip Gloss styles for the Vektix TUI.
+// Theme holds the shared Lip Gloss styles for the Vektix TUI. It intentionally sets no
+// explicit colors: every style relies on the terminal's own default foreground/background
+// and its own ANSI palette (via Bold/Italic/Faint/Reverse) so Vektix always matches
+// whatever theme the user's terminal is already configured with.
 type Theme struct {
-	Primary   lipgloss.Color
-	Secondary lipgloss.Color
-	Success   lipgloss.Color
-	Warning   lipgloss.Color
-	Error     lipgloss.Color
-	Muted     lipgloss.Color
-	Border    lipgloss.Color
-	Highlight lipgloss.Color
-	Text      lipgloss.Color
-	Subtle    lipgloss.Color
-
 	// Styles
 	Title          lipgloss.Style
 	ScopeBadge     lipgloss.Style
@@ -24,26 +16,26 @@ type Theme struct {
 	KeyHintBracket lipgloss.Style
 	KeyHintDesc    lipgloss.Style
 
-	Prompt         lipgloss.Style
-	UserInput      lipgloss.Style
-	UserQueryEcho  lipgloss.Style
+	Prompt        lipgloss.Style
+	UserInput     lipgloss.Style
+	UserQueryEcho lipgloss.Style
 
-	PathHeader     lipgloss.Style
-	LineRange      lipgloss.Style
-	Symbol         lipgloss.Style
-	RankInfo       lipgloss.Style
-	Gutter         lipgloss.Style
-	ExcerptBorder  lipgloss.Style
+	PathHeader    lipgloss.Style
+	LineRange     lipgloss.Style
+	Symbol        lipgloss.Style
+	RankInfo      lipgloss.Style
+	Gutter        lipgloss.Style
+	ExcerptBorder lipgloss.Style
 
-	ActionBar      lipgloss.Style
-	ActionKey      lipgloss.Style
-	ActionLabel    lipgloss.Style
-	ActionMore     lipgloss.Style
+	ActionBar   lipgloss.Style
+	ActionKey   lipgloss.Style
+	ActionLabel lipgloss.Style
+	ActionMore  lipgloss.Style
 
-	SuccessText    lipgloss.Style
-	WarningText    lipgloss.Style
-	ErrorText      lipgloss.Style
-	InfoText       lipgloss.Style
+	SuccessText lipgloss.Style
+	WarningText lipgloss.Style
+	ErrorText   lipgloss.Style
+	InfoText    lipgloss.Style
 
 	PickerBox      lipgloss.Style
 	PickerTitle    lipgloss.Style
@@ -60,154 +52,62 @@ type Theme struct {
 	ExplainContent lipgloss.Style
 }
 
-// DefaultTheme returns the standard Vektix dark/modern theme.
+// DefaultTheme returns a theme that uses the terminal's own default colors throughout.
+// Emphasis is conveyed with Bold, Italic, Faint (dim), and Reverse (swap fg/bg using the
+// terminal's own palette) instead of any hardcoded color values.
 func DefaultTheme() Theme {
-	t := Theme{
-		Primary:   lipgloss.Color("#7D56F4"),
-		Secondary: lipgloss.Color("#00D7D7"),
-		Success:   lipgloss.Color("#04B575"),
-		Warning:   lipgloss.Color("#FFB86C"),
-		Error:     lipgloss.Color("#FF5F87"),
-		Muted:     lipgloss.Color("#626262"),
-		Border:    lipgloss.Color("#3A3A3A"),
-		Highlight: lipgloss.Color("#24283B"),
-		Text:      lipgloss.Color("#FAFAFA"),
-		Subtle:    lipgloss.Color("#A0A0A0"),
-	}
+	var t Theme
 
-	t.Title = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Secondary)
+	t.Title = lipgloss.NewStyle().Bold(true)
 
-	t.ScopeBadge = lipgloss.NewStyle().
-		Foreground(t.Secondary).
-		Background(lipgloss.Color("#1A202C")).
-		Padding(0, 1)
+	t.ScopeBadge = lipgloss.NewStyle().Reverse(true).Padding(0, 1)
+	t.ScopeGlobal = lipgloss.NewStyle().Reverse(true).Bold(true).Padding(0, 1)
+	t.StatusBar = lipgloss.NewStyle().Faint(true).Padding(0, 1)
 
-	t.ScopeGlobal = lipgloss.NewStyle().
-		Foreground(t.Warning).
-		Background(lipgloss.Color("#1A202C")).
-		Padding(0, 1)
+	t.KeyHintKey = lipgloss.NewStyle().Bold(true)
+	t.KeyHintBracket = lipgloss.NewStyle().Faint(true)
+	t.KeyHintDesc = lipgloss.NewStyle().Faint(true)
 
-	t.StatusBar = lipgloss.NewStyle().
-		Foreground(t.Subtle).
-		Background(lipgloss.Color("#16161E")).
-		Padding(0, 1)
+	t.Prompt = lipgloss.NewStyle().Bold(true)
+	t.UserInput = lipgloss.NewStyle()
+	t.UserQueryEcho = lipgloss.NewStyle().Bold(true)
 
-	t.KeyHintKey = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Secondary)
-
-	t.KeyHintBracket = lipgloss.NewStyle().
-		Foreground(t.Muted)
-
-	t.KeyHintDesc = lipgloss.NewStyle().
-		Foreground(t.Subtle)
-
-	t.Prompt = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Secondary)
-
-	t.UserInput = lipgloss.NewStyle().
-		Foreground(t.Text)
-
-	t.UserQueryEcho = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#E2E8F0"))
-
-	t.PathHeader = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#7AA2F7"))
-
-	t.LineRange = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#89DDFF"))
-
-	t.Symbol = lipgloss.NewStyle().
-		Foreground(t.Warning)
-
-	t.RankInfo = lipgloss.NewStyle().
-		Foreground(t.Muted).
-		Italic(true)
-
-	t.Gutter = lipgloss.NewStyle().
-		Foreground(t.Muted)
+	t.PathHeader = lipgloss.NewStyle().Bold(true).Underline(true)
+	t.LineRange = lipgloss.NewStyle().Faint(true)
+	t.Symbol = lipgloss.NewStyle()
+	t.RankInfo = lipgloss.NewStyle().Faint(true).Italic(true)
+	t.Gutter = lipgloss.NewStyle().Faint(true)
 
 	t.ExcerptBorder = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.Border).
+		Border(lipgloss.NormalBorder()).
 		Padding(0, 1)
 
-	t.ActionBar = lipgloss.NewStyle().
-		Foreground(t.Subtle).
-		Padding(0, 0, 0, 1)
+	t.ActionBar = lipgloss.NewStyle().Faint(true).Padding(0, 0, 0, 1)
+	t.ActionKey = lipgloss.NewStyle().Bold(true)
+	t.ActionLabel = lipgloss.NewStyle()
+	t.ActionMore = lipgloss.NewStyle().Faint(true)
 
-	t.ActionKey = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Secondary)
-
-	t.ActionLabel = lipgloss.NewStyle().
-		Foreground(t.Text)
-
-	t.ActionMore = lipgloss.NewStyle().
-		Foreground(t.Muted)
-
-	t.SuccessText = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Success)
-
-	t.WarningText = lipgloss.NewStyle().
-		Foreground(t.Warning)
-
-	t.ErrorText = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Error)
-
-	t.InfoText = lipgloss.NewStyle().
-		Foreground(t.Secondary)
+	t.SuccessText = lipgloss.NewStyle().Bold(true)
+	t.WarningText = lipgloss.NewStyle().Italic(true)
+	t.ErrorText = lipgloss.NewStyle().Bold(true).Underline(true)
+	t.InfoText = lipgloss.NewStyle()
 
 	t.PickerBox = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.Primary).
+		Border(lipgloss.NormalBorder()).
 		Padding(1, 2)
 
-	t.PickerTitle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Secondary).
-		MarginBottom(1)
+	t.PickerTitle = lipgloss.NewStyle().Bold(true).MarginBottom(1)
+	t.PickerSelected = lipgloss.NewStyle().Reverse(true).Bold(true).Padding(0, 1)
+	t.PickerNormal = lipgloss.NewStyle().Padding(0, 1)
+	t.PickerRank = lipgloss.NewStyle().Faint(true)
 
-	t.PickerSelected = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Text).
-		Background(t.Highlight).
-		Padding(0, 1)
+	t.IndexTitle = lipgloss.NewStyle().Bold(true)
+	t.IndexStatLabel = lipgloss.NewStyle().Faint(true)
+	t.IndexStatValue = lipgloss.NewStyle().Bold(true)
+	t.ProgressBar = lipgloss.NewStyle()
 
-	t.PickerNormal = lipgloss.NewStyle().
-		Foreground(t.Subtle).
-		Padding(0, 1)
-
-	t.PickerRank = lipgloss.NewStyle().
-		Foreground(t.Muted)
-
-	t.IndexTitle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Secondary)
-
-	t.IndexStatLabel = lipgloss.NewStyle().
-		Foreground(t.Subtle)
-
-	t.IndexStatValue = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Text)
-
-	t.ProgressBar = lipgloss.NewStyle().
-		Foreground(t.Primary)
-
-	t.ExplainHeader = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(t.Warning)
-
-	t.ExplainContent = lipgloss.NewStyle().
-		Foreground(t.Text)
+	t.ExplainHeader = lipgloss.NewStyle().Bold(true)
+	t.ExplainContent = lipgloss.NewStyle()
 
 	return t
 }

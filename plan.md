@@ -27,10 +27,10 @@ the default and it loads its model on demand.
 
 ### What Vektix does NOT do
 
-- ❌ No editing, appending, deleting, or moving files
-- ❌ No LLM-authored answers by default — excerpts are verbatim
-- ❌ No external API calls — everything local
-- ❌ No cloud, no telemetry, no data leaving your machine
+- NOT: No editing, appending, deleting, or moving files
+- NOT: No LLM-authored answers by default — excerpts are verbatim
+- NOT: No external API calls — everything local
+- NOT: No cloud, no telemetry, no data leaving your machine
 
 ---
 
@@ -44,21 +44,21 @@ input
   │
   ├─ ROUTER ── guarded regex (fires only on path-shaped args)   ~1ms
   │              └─ miss ─► qwen2.5:0.5b, JSON-Schema-constrained  ~300ms
-  │                          → {action, query, path?, lines?}
+  │                          -> {action, query, path?, lines?}
   │
   └─ RESOLVER (only for actions that need a target)
         │   SCOPE = CWD subtree | --scope <path> | global
         │
-        ├─ path index  (basename / stem / dir, fuzzy)   ~1ms   no model   ← exact scope filter
-        ├─ BM25        (content + paths)                ~10ms  no model   ← exact scope filter
-        └─ vector      (nomic-embed-text → chromem-go)  ~20ms  embedder   ← oversample + filter
+        ├─ path index  (basename / stem / dir, fuzzy)   ~1ms   no model   <- exact scope filter
+        ├─ BM25        (content + paths)                ~10ms  no model   <- exact scope filter
+        └─ vector      (nomic-embed-text -> chromem-go)  ~20ms  embedder   <- oversample + filter
                           │
-                    RRF fusion → ranked candidates
+                    RRF fusion -> ranked candidates
                           │
         ┌─────────────────┴─────────────────┐
    unambiguous                          ambiguous
         │                                   │
-      execute                     TUI picker → execute
+      execute                     TUI picker -> execute
         │
    locate │ read │ excerpt │ open │ copy │ list
                           │
@@ -111,7 +111,7 @@ Because BM25 carries exact-token matching in a hybrid design, the embedder only 
 fuzzy phrasing, and the smaller model is more than sufficient for that. Reconsider only if the
 eval shows scoped `locate` recall@3 below 80%.
 
-> ⚠️ **`nomic-embed-text` requires task prefixes.** Documents must be embedded as
+> NOTE: **`nomic-embed-text` requires task prefixes.** Documents must be embedded as
 > `search_document: <text>` and queries as `search_query: <text>`. Omitting them degrades
 > retrieval **silently** — no error, just worse results. The prefix is applied inside
 > `internal/ollama/embed.go` and never by callers, is recorded in the index manifest, and is
@@ -202,7 +202,7 @@ vektix/
 │   │   ├── vector.go               # chromem-go query + oversampling
 │   │   └── fuse.go                 # Reciprocal rank fusion
 │   ├── excerpt/
-│   │   ├── expand.go               # Chunk → natural boundary
+│   │   ├── expand.go               # Chunk -> natural boundary
 │   │   └── render.go               # Line numbers, gutter, highlight
 │   ├── index/
 │   │   ├── walk.go                 # Symlink-safe walker, binary sniff
@@ -225,7 +225,7 @@ vektix/
 │   ├── fileops/
 │   │   ├── ops.go                  # read, open (read-only)
 │   │   └── safety.go               # Path confinement, secrets denylist
-│   ├── clipboard/copy.go           # wl-copy → xclip → xsel → OSC 52
+│   ├── clipboard/copy.go           # wl-copy -> xclip -> xsel -> OSC 52
 │   ├── session/refs.go             # Last results, ordinal references
 │   ├── parser/
 │   │   ├── text.go                 # Plain text / markdown
@@ -289,11 +289,11 @@ Scope is a **view over the existing index**, not a separate index. Nothing is re
 ### Scope resolution at startup
 
 ```
-CWD is under an indexed root    → scope = CWD subtree        (the normal case)
-CWD is an indexed root itself   → scope = that root
-CWD is outside every root       → prompt: index it now, or continue global
---scope <path>                  → explicit override
---global / -g                   → force the full index
+CWD is under an indexed root    -> scope = CWD subtree        (the normal case)
+CWD is an indexed root itself   -> scope = that root
+CWD is outside every root       -> prompt: index it now, or continue global
+--scope <path>                  -> explicit override
+--global / -g                   -> force the full index
 ```
 
 Config: `scope_mode = "auto" | "global" | "cwd"`, default `auto` (the ladder above).
@@ -312,7 +312,7 @@ values, so a subtree filter is not expressible as a `where` clause.
 
 **Approach — adaptive oversampling with an in-memory prefix filter:**
 
-1. The manifest keeps a directory → chunk-count prefix tree, making `scopeFraction` an O(1) lookup.
+1. The manifest keeps a directory -> chunk-count prefix tree, making `scopeFraction` an O(1) lookup.
 2. Query with `nResults = clamp(k / max(scopeFraction, 0.01), k, collectionSize)`.
 3. Prefix-filter the returned documents by path in Go.
 4. If fewer than `k` survive, retry once at full `collectionSize` — an exhaustive scan, still only
@@ -370,7 +370,7 @@ var fastPatterns = []Pattern{
 }
 ```
 
-> ⚠️ **The guard is not optional — it is the whole point.**
+> NOTE: **The guard is not optional — it is the whole point.**
 > An unguarded `^find\s+(.+)$` turns *"find out what I wrote about docker"* into a glob of
 > `out what I wrote about docker`. An unguarded `^show\s+(.+)$` turns *"show me what's in the
 > docker file"* into a path of `me what's in the docker file`. Instant, confident, and wrong — the
@@ -510,8 +510,8 @@ Strategy is selected by extension.
 Split on **symbol boundaries**, so an excerpt is a whole function rather than a window that cuts
 mid-body.
 
-- **Go** → stdlib `go/parser` + `go/ast`. Exact, zero dependencies, no CGO.
-- **Everything else** → heuristics on column-0 declarations
+- **Go** -> stdlib `go/parser` + `go/ast`. Exact, zero dependencies, no CGO.
+- **Everything else** -> heuristics on column-0 declarations
   (`func`, `def`, `class`, `function`, `fn`, `type`, `impl`, `pub fn`).
 - Oversized functions fall back to windowed splitting, retaining the signature in every chunk so
   each one remains self-describing.
@@ -538,7 +538,7 @@ code. Budgets carry a 25% safety margin and the estimator lives in one place
 
 ### Pipelined indexing
 
-Stages overlap via goroutines and channels: **walk → parse → chunk → embed (batched) → store**.
+Stages overlap via goroutines and channels: **walk -> parse -> chunk -> embed (batched) -> store**.
 Embedding is the bottleneck, so it runs in batches of 64–100 texts per `/api/embed` call, which
 eliminates per-chunk HTTP overhead. Backpressure comes from bounded channels; the walker blocks
 rather than buffering an entire tree in memory.
@@ -561,7 +561,7 @@ A manifest sits beside the vector DB and is the source of truth for reconciliati
 
 `dir_counts` is the prefix tree that makes `scopeFraction` an O(1) lookup for scoped queries.
 
-> ⚠️ **Index invalidation.** Changing `embedding_model` mixes incompatible vectors into one
+> NOTE: **Index invalidation.** Changing `embedding_model` mixes incompatible vectors into one
 > collection — a dimension mismatch at best, silently garbage rankings at worst. On any mismatch
 > of `{embedding_model, dim, prefix_scheme, chunker_version}`, Vektix **refuses to query** and prints
 > the exact `vektix reindex` command. It never degrades quietly.
@@ -634,20 +634,20 @@ Secrets:         .ssh/ .gnupg/ .aws/credentials *.pem *.key .env*
 
 ```
 File: ~/Documents/projects/myapp/node_modules/lodash/README.md
-  1. Hardcoded?        → no
-  2. Config exclude?   → YES ("node_modules") → SKIP THE ENTIRE DIRECTORY (don't walk in)
+  1. Hardcoded?        -> no
+  2. Config exclude?   -> YES ("node_modules") -> SKIP THE ENTIRE DIRECTORY (don't walk in)
 
 File: ~/Documents/notes/drafts/half-finished.md
-  1. Hardcoded?        → no
-  2. Config exclude?   → no
-  3. .vektixignore?     → YES (~/Documents/notes/.vektixignore has "drafts/") → SKIP
+  1. Hardcoded?        -> no
+  2. Config exclude?   -> no
+  3. .vektixignore?     -> YES (~/Documents/notes/.vektixignore has "drafts/") -> SKIP
 
 File: ~/Documents/notes/meeting-notes.md
   1-3. no match
-  4. Extension allowed?      → yes (.md)
-  5. Under max_file_size_mb? → yes
-  6. Binary sniff (first 8KB NUL / invalid UTF-8)? → clean
-     → INDEX ✅
+  4. Extension allowed?      -> yes (.md)
+  5. Under max_file_size_mb? -> yes
+  6. Binary sniff (first 8KB NUL / invalid UTF-8)? -> clean
+     -> INDEX OK
 ```
 
 ### CLI
@@ -730,7 +730,7 @@ allow_secrets    = false                 # .ssh/, *.pem, .env* etc. require --un
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 🔷 VIXOR    scope: ~/projects/go/vektix (412)   [g] global    │
+│ VEKTIX    scope: ~/projects/go/vektix (412)   [g] global    │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  > where do we handle the retry backoff                      │
@@ -745,7 +745,7 @@ allow_secrets    = false                 # .ssh/, *.pem, .env* etc. require --un
 │    [o]pen  [c]opy  [e]xplain  [n]ext  2 more matches         │
 │                                                              │
 │  > open it                                                   │
-│  ✓ opened internal/ollama/client.go:88 in nvim               │
+│  opened internal/ollama/client.go:88 in nvim               │
 │                                                              │
 ├──────────────────────────────────────────────────────────────┤
 │ > _                                                          │
@@ -853,7 +853,7 @@ Sequenced so a genuinely useful tool exists at the end of **Phase 3**, before th
 - [ ] Guarded regex fast-path + guard predicates
 - [ ] Hijack regression fixtures
 - [ ] Schema-constrained classification via Ollama `format`
-- [ ] Clipboard: `wl-copy` → `xclip` → `xsel` → OSC 52
+- [ ] Clipboard: `wl-copy` -> `xclip` -> `xsel` -> OSC 52
 
 ### Phase 5 — TUI
 - [ ] Bubble Tea app, query loop, result rendering
@@ -987,13 +987,13 @@ vektix eval --dataset testdata/locate_eval.jsonl
 
 ### Manual verification
 
-1. **No Ollama** → helpful install guidance, not a stack trace
-2. **`vektix index ~/test-dir`** with .txt/.md/.pdf/.go → chunk counts match `--dry-run`
-3. **Malformed PDF in the tree** → quarantined, run completes
-4. **Locate by path** — "my resume" → correct file, no model loaded (verify via `ollama ps`)
-5. **Locate by content** — "retry backoff" → correct function, excerpt is the whole function
-6. **Exact token** — an error code or identifier → found via BM25 where vector alone would miss
-7. **Scoped** — same query from `~/projects/foo` and `~/notes` → disjoint, correct results
+1. **No Ollama** -> helpful install guidance, not a stack trace
+2. **`vektix index ~/test-dir`** with .txt/.md/.pdf/.go -> chunk counts match `--dry-run`
+3. **Malformed PDF in the tree** -> quarantined, run completes
+4. **Locate by path** — "my resume" -> correct file, no model loaded (verify via `ollama ps`)
+5. **Locate by content** — "retry backoff" -> correct function, excerpt is the whole function
+6. **Exact token** — an error code or identifier -> found via BM25 where vector alone would miss
+7. **Scoped** — same query from `~/projects/foo` and `~/notes` -> disjoint, correct results
 8. **Scope visibility** — status bar shows scope; zero-result message names it and offers global
 9. **Session refs** — "open the first one" works; changing scope invalidates it
 10. **Copy** — excerpt reaches the clipboard under Wayland, X11, and over SSH (OSC 52)

@@ -33,7 +33,7 @@ internal/
                          evaluated in that order; .vektixignore rules are gitignore-style
                          (last matching rule wins, negation supported).
     manifest.go             Manifest struct + CheckValidity (embedding_model/dim/prefix_scheme/
-                         chunker_version mismatch → ErrManifestMismatch), HasChanged
+                         chunker_version mismatch -> ErrManifestMismatch), HasChanged
                          (mtime+size, SHA256 tiebreaker), ScopeFraction over dir_counts.
                          Nothing populates dir_counts yet — there's no indexing pipeline to
                          call these from.
@@ -74,7 +74,7 @@ internal/
                          confinement. The single choke point every path must go through.
     ops.go               ReadFile, Open (shells out with argv-array exec.Command, never a
                          shell string), splitEditorCmd (shell-quote-aware tokenizer).
-  clipboard/copy.go       wl-copy → xclip → xsel → OSC 52 fallback chain.
+  clipboard/copy.go       wl-copy -> xclip -> xsel -> OSC 52 fallback chain.
   router/
     fastpath.go             Guarded regex Tier 1 + shape guards (pathShaped, globShaped,
                          pathShapedOrRef). Hijack regression cases live in

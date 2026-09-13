@@ -1,4 +1,4 @@
-// Package index implements the walk → parse → chunk → embed → store pipeline
+// Package index implements the walk -> parse -> chunk -> embed -> store pipeline
 // described in plan.md ("Indexing & Freshness"), plus the reconciliation pass
 // that keeps the manifest and the vector store in agreement.
 package index

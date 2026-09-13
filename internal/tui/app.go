@@ -304,7 +304,11 @@ func (a *AppModel) updateScope(override string, global bool) {
 		return count
 	}
 
-	st := ResolveScopeState(a.cfg, a.cwd, override, global, totalChunks, countFn)
+	var manifestRoots []string
+	if c != nil && c.manifest != nil {
+		manifestRoots = c.manifest.Roots
+	}
+	st := ResolveScopeState(a.cfg, a.cwd, override, global, totalChunks, countFn, manifestRoots...)
 	a.setScopeState(st)
 }
 
@@ -564,21 +568,29 @@ func (a *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		}
 
-		// Single-key hotkeys when text input is empty
+		// Result-action hotkeys use ctrl+<letter> so they never collide with
+		// plain typing — a bare "e"/"o"/"c"/"n"/"p"/"g" keystroke used to be
+		// swallowed as a shortcut instead of reaching the input box, making
+		// it impossible to type a message starting with one of those letters.
+		switch msg.String() {
+		case "ctrl+o":
+			return a, a.triggerOpenLatest()
+		case "ctrl+y":
+			return a, a.triggerCopyLatest(false)
+		case "ctrl+e":
+			return a, a.triggerExplainLatest()
+		case "ctrl+n":
+			return a, a.triggerCycleMatch(1)
+		case "ctrl+p":
+			return a, a.triggerCycleMatch(-1)
+		case "ctrl+g":
+			return a, a.triggerToggleGlobal()
+		}
+
+		// Tab/Esc are not typable characters, so gating them on an empty
+		// input box is unambiguous.
 		if a.input.Value() == "" {
 			switch msg.String() {
-			case "o":
-				return a, a.triggerOpenLatest()
-			case "c":
-				return a, a.triggerCopyLatest(false)
-			case "e":
-				return a, a.triggerExplainLatest()
-			case "n":
-				return a, a.triggerCycleMatch(1)
-			case "p":
-				return a, a.triggerCycleMatch(-1)
-			case "g":
-				return a, a.triggerToggleGlobal()
 			case "tab":
 				return a, a.triggerOpenPicker()
 			case "esc":
@@ -660,12 +672,13 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 
 	case ":help", ":?":
 		helpText := strings.Join([]string{
-			"🔷 Vektix Commands & Keybinds",
-			"  [o]pen      Open current result in editor",
-			"  [c]opy      Copy current excerpt to clipboard",
-			"  [e]xplain   Explain current excerpt with Ollama",
-			"  [n]ext      Cycle to next matching result",
-			"  [g]lobal    Toggle global search on / off",
+			"Vektix Commands & Keybinds",
+			"  ctrl+o      Open current result in editor",
+			"  ctrl+y      Copy current excerpt to clipboard",
+			"  ctrl+e      Explain current excerpt with Ollama",
+			"  ctrl+n      Cycle to next matching result",
+			"  ctrl+p      Cycle to previous matching result",
+			"  ctrl+g      Toggle global search on / off",
 			"  [tab]       Open ambiguous candidate picker",
 			"",
 			"Commands:",
@@ -719,7 +732,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			a.sessionRefs.Clear()
 			a.appendHistory(ChatEntry{
 				IsUser:     false,
-				SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
+				SuccessMsg: fmt.Sprintf("Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
 				Timestamp:  time.Now(),
 			})
 		} else {
@@ -731,7 +744,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 			a.sessionRefs.Clear()
 			a.appendHistory(ChatEntry{
 				IsUser:     false,
-				SuccessMsg: fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", a.getScopeState().Describe()),
+				SuccessMsg: fmt.Sprintf("Switched scope to %s. Session refs reset.", a.getScopeState().Describe()),
 				Timestamp:  time.Now(),
 			})
 		}
@@ -743,7 +756,7 @@ func (a *AppModel) handleColonCommand(input string) tea.Cmd {
 		a.sessionRefs.Clear()
 		a.appendHistory(ChatEntry{
 			IsUser:     false,
-			SuccessMsg: fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
+			SuccessMsg: fmt.Sprintf("Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(a.getScopeState().Total)),
 			Timestamp:  time.Now(),
 		})
 		a.refreshViewport()
@@ -839,7 +852,7 @@ func (a *AppModel) handleSessionReferenceAction(input string) tea.Cmd {
 			a.setActiveResultIndex(idx)
 			a.appendHistory(ChatEntry{
 				IsUser:     false,
-				SuccessMsg: fmt.Sprintf("✓ Selected match #%d: %s", idx+1, format.DisplayPath(item.Path)),
+				SuccessMsg: fmt.Sprintf("Selected match #%d: %s", idx+1, format.DisplayPath(item.Path)),
 				Timestamp:  time.Now(),
 			})
 			a.refreshViewport()
@@ -938,7 +951,7 @@ func (a *AppModel) executeIntent(query string) tea.Cmd {
 				return searchCompleteMsg{
 					Query:     query,
 					Intent:    intent,
-					Notice:    fmt.Sprintf("✓ opened %s in editor", format.DisplayPath(resolvedPath)),
+					Notice:    fmt.Sprintf("opened %s in editor", format.DisplayPath(resolvedPath)),
 					Timestamp: time.Now(),
 				}
 			}
@@ -1004,7 +1017,7 @@ func (a *AppModel) executeIntent(query string) tea.Cmd {
 			return searchCompleteMsg{
 				Query:     query,
 				Intent:    intent,
-				Notice:    fmt.Sprintf("✓ copied %s of %s to clipboard (%s)", modeDesc, format.DisplayPath(targetPath), mechanism),
+				Notice:    fmt.Sprintf("copied %s of %s to clipboard (%s)", modeDesc, format.DisplayPath(targetPath), mechanism),
 				Timestamp: time.Now(),
 			}
 
@@ -1111,20 +1124,20 @@ func (a *AppModel) executeIntent(query string) tea.Cmd {
 			}
 
 			var out strings.Builder
-			out.WriteString(fmt.Sprintf("📁 Listing for %s:\n", format.DisplayPath(safeDir)))
+			out.WriteString(fmt.Sprintf("Listing for %s:\n", format.DisplayPath(safeDir)))
 			for _, e := range entries {
 				if strings.HasPrefix(e.Name(), ".") {
 					continue
 				}
 				if e.IsDir() {
-					out.WriteString(fmt.Sprintf("  📂 %s/\n", e.Name()))
+					out.WriteString(fmt.Sprintf("  %s/\n", e.Name()))
 				} else {
 					info, _ := e.Info()
 					sz := ""
 					if info != nil {
 						sz = fmt.Sprintf(" (%s)", format.HumanBytes(info.Size()))
 					}
-					out.WriteString(fmt.Sprintf("  📄 %s%s\n", e.Name(), sz))
+					out.WriteString(fmt.Sprintf("  %s%s\n", e.Name(), sz))
 				}
 			}
 
@@ -1423,10 +1436,10 @@ func (a *AppModel) formatEmptyMessage(query string, weakHits int, st ScopeState)
 			query, st.Describe())
 	}
 	if weakHits > 0 {
-		return fmt.Sprintf("no matches for %q in scope %s (%d weak matches outside this scope — press [g] to search globally)",
+		return fmt.Sprintf("no matches for %q in scope %s (%d weak matches outside this scope — press ctrl+g to search globally)",
 			query, st.Describe(), weakHits)
 	}
-	return fmt.Sprintf("no matches for %q in scope %s (press [g] to search all %s chunks globally)",
+	return fmt.Sprintf("no matches for %q in scope %s (press ctrl+g to search all %s chunks globally)",
 		query, st.Describe(), format.HumanInt(st.Total))
 }
 
@@ -1481,11 +1494,11 @@ func (a *AppModel) streamExplain(entryIdx int, item session.Item, modelName stri
 			}
 		}
 
-		timeout := time.Duration(a.cfg.Ollama.Timeouts.StreamIdleSeconds) * time.Second
-		if timeout <= 0 {
-			timeout = 60 * time.Second
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		// No flat deadline here: ChatStream enforces an idle timeout per read
+		// (internal/ollama/chat.go's idleTimerReader), which correctly tolerates
+		// a slow cold model load or a long generation as long as bytes keep
+		// arriving, rather than capping the whole request at a fixed duration.
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
 		promptText := fmt.Sprintf("File: %s\n```\n%s\n```\nExplain what this code or document section does and why it is significant.",
@@ -1510,7 +1523,11 @@ func (a *AppModel) streamExplain(entryIdx int, item session.Item, modelName stri
 			},
 		}
 
-		resp, err := c.ollamaClient.Chat(ctx, req)
+		var sb strings.Builder
+		err := c.ollamaClient.ChatStream(ctx, req, func(chunk string) error {
+			sb.WriteString(chunk)
+			return nil
+		})
 		if err != nil {
 			return explainErrMsg{
 				EntryIndex: entryIdx,
@@ -1520,7 +1537,7 @@ func (a *AppModel) streamExplain(entryIdx int, item session.Item, modelName stri
 
 		return explainChunkMsg{
 			EntryIndex: entryIdx,
-			Chunk:      resp.Message.Content,
+			Chunk:      sb.String(),
 		}
 	}
 }
@@ -1549,9 +1566,9 @@ func (a *AppModel) triggerToggleGlobal() tea.Cmd {
 	a.sessionRefs.Clear()
 
 	st = a.getScopeState()
-	msg := fmt.Sprintf("✓ Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(st.Total))
+	msg := fmt.Sprintf("Switched scope to global (%s chunks). Session refs reset.", format.HumanInt(st.Total))
 	if !newGlobal {
-		msg = fmt.Sprintf("✓ Switched scope to %s. Session refs reset.", st.Describe())
+		msg = fmt.Sprintf("Switched scope to %s. Session refs reset.", st.Describe())
 	}
 	return a.flashStatus(msg, false)
 }
@@ -1635,7 +1652,7 @@ func (a *AppModel) openItem(item session.Item) tea.Cmd {
 	if item.Locator.Start > 0 {
 		locInfo = fmt.Sprintf(":%d", item.Locator.Start)
 	}
-	return a.flashStatus(fmt.Sprintf("✓ opened %s%s in editor", format.DisplayPath(item.Path), locInfo), false)
+	return a.flashStatus(fmt.Sprintf("opened %s%s in editor", format.DisplayPath(item.Path), locInfo), false)
 }
 
 func (a *AppModel) copyItem(item session.Item, pathOnly bool) tea.Cmd {
@@ -1651,7 +1668,7 @@ func (a *AppModel) copyItem(item session.Item, pathOnly bool) tea.Cmd {
 		return a.flashStatus(fmt.Sprintf("clipboard copy failed: %v", err), true)
 	}
 
-	return a.flashStatus(fmt.Sprintf("✓ copied %s of %s to clipboard (%s)", modeDesc, format.DisplayPath(item.Path), mechanism), false)
+	return a.flashStatus(fmt.Sprintf("copied %s of %s to clipboard (%s)", modeDesc, format.DisplayPath(item.Path), mechanism), false)
 }
 
 func (a *AppModel) flashStatus(msg string, isError bool) tea.Cmd {
@@ -1688,7 +1705,7 @@ func (a *AppModel) View() string {
 	var flashLine string
 	if a.statusFlash != "" {
 		if a.statusIsErr {
-			flashLine = a.theme.ErrorText.Render("✗ " + a.statusFlash)
+			flashLine = a.theme.ErrorText.Render("[FAIL] " + a.statusFlash)
 		} else {
 			flashLine = a.theme.SuccessText.Render(a.statusFlash)
 		}
@@ -1698,7 +1715,7 @@ func (a *AppModel) View() string {
 	inputBox := lipgloss.NewStyle().MarginTop(1).Render(
 		lipgloss.JoinHorizontal(
 			lipgloss.Left,
-			a.theme.Prompt.Render("❯ "),
+			a.theme.Prompt.Render("> "),
 			a.input.View(),
 		),
 	)
