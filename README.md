@@ -476,3 +476,4 @@ go test ./... -race -count=1   # Ollama is mocked over httptest; no live service
 ```
 
 See [AGENTS.md](AGENTS.md) for repo layout, hard rules, and invariants if you're contributing.
+last test
